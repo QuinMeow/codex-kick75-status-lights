@@ -13,6 +13,14 @@ SPEC.loader.exec_module(INSTALLER)
 
 
 class InstallerTests(unittest.TestCase):
+    def test_app_plist_describes_menu_bar_bundle(self):
+        info = INSTALLER.app_info_plist()
+        self.assertEqual(info["CFBundleIdentifier"], "com.zzm.codex-kick75.app")
+        self.assertEqual(info["CFBundleShortVersionString"], "0.2.0")
+        self.assertEqual(info["CFBundleVersion"], "3")
+        self.assertEqual(info["LSMinimumSystemVersion"], "13.0")
+        self.assertTrue(info["LSUIElement"])
+
     def test_merge_preserves_other_hooks_and_is_idempotent(self):
         config = {
             "description": "existing",
@@ -46,6 +54,26 @@ class InstallerTests(unittest.TestCase):
                 state, error = INSTALLER.load_runtime_state()
         self.assertIsNone(state)
         self.assertIsNotNone(error)
+
+    def test_configure_writes_valid_custom_settings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app_dir = pathlib.Path(temporary)
+            settings_path = app_dir / "settings.json"
+            socket_path = app_dir / "status.sock"
+            socket_path.touch()
+            with (
+                mock.patch.object(INSTALLER, "SETTINGS_PATH", settings_path),
+                mock.patch.object(INSTALLER, "SOCKET_PATH", socket_path),
+                mock.patch.object(INSTALLER, "daemon_request") as request,
+                mock.patch("builtins.print"),
+            ):
+                self.assertEqual(INSTALLER.configure("running", "#123abc", 42, False), 0)
+            request.assert_called_once_with("reload", timeout=15.0)
+            settings = INSTALLER.load_settings(settings_path)
+            self.assertEqual(
+                settings["states"]["running"],
+                {"color": "#123ABC", "brightness": 42},
+            )
 
 
 if __name__ == "__main__":

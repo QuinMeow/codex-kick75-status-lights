@@ -13,7 +13,16 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from codex_kick75_common import APP_DIR, VERSION
+from codex_kick75_common import (
+    APP_DIR,
+    LIGHT_STATES,
+    SETTINGS_PATH,
+    VERSION,
+    default_settings,
+    load_settings,
+    side_state_for,
+    validate_settings,
+)
 
 SOCKET_PATH = APP_DIR / "status.sock"
 STATE_PATH = APP_DIR / "state.json"
@@ -24,13 +33,10 @@ STALE_TASK_SECONDS = float(os.environ.get("CODEX_KICK75_STALE_TASK", str(12 * 60
 HID_RETRY_SECONDS = float(os.environ.get("CODEX_KICK75_HID_RETRY", "10"))
 HID_RECONNECT_CHECK_SECONDS = float(os.environ.get("CODEX_KICK75_RECONNECT_CHECK", "10"))
 CLIENT_READ_TIMEOUT_SECONDS = float(os.environ.get("CODEX_KICK75_CLIENT_TIMEOUT", "0.5"))
+DEFAULT_PREVIEW_SECONDS = 3.0
+MAX_PREVIEW_SECONDS = 10.0
 MAX_MESSAGE_SIZE = 1024 * 1024
 MAX_LOG_SIZE = 1024 * 1024
-COLOR_SIDE_STATES = {
-    "red": "0264010000ff0000",
-    "yellow": "0264010000ffb400",
-    "green": "026401000000ff00",
-}
 
 
 class StatusAggregator:
@@ -100,12 +106,57 @@ class StatusAggregator:
     def effective(self) -> str:
         statuses = {task.get("status") for task in self.tasks.values()}
         if "error" in statuses:
-            return "red"
+            details = {
+                task.get("detail")
+                for task in self.tasks.values()
+                if task.get("status") == "error"
+            }
+            if "tool_failure" in details:
+                return "failure"
+            if "permission" in details:
+                return "permission"
+            return "failure"
         if "running" in statuses:
-            return "yellow"
+            return "running"
         if "completed" in statuses:
-            return "green"
+            return "completed"
         return "idle"
+
+
+class SettingsManager:
+    def __init__(self, path: Path = SETTINGS_PATH) -> None:
+        self.path = path
+        self.settings = default_settings()
+        self.signature = None
+        self.error: Optional[str] = None
+        self.reload(force=True)
+
+    def _signature(self) -> tuple:
+        try:
+            stat = self.path.stat()
+            return (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+        except FileNotFoundError:
+            return ("missing",)
+
+    def reload(self, force: bool = False) -> bool:
+        signature = self._signature()
+        if not force and signature == self.signature:
+            return False
+        self.signature = signature
+        try:
+            updated = load_settings(self.path)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            self.error = str(error)
+            return False
+        changed = updated != self.settings
+        self.settings = updated
+        self.error = None
+        return changed
+
+    def light(self, state: str) -> Optional[Dict[str, Any]]:
+        if state not in LIGHT_STATES:
+            return None
+        return dict(self.settings["states"][state])
 
 
 class LedController:
@@ -147,7 +198,7 @@ class LedController:
     def _read_baseline(self) -> str:
         return self._read_side_state()
 
-    def apply(self, desired: str, force: bool = False) -> bool:
+    def apply(self, desired: str, settings: Dict[str, Any], force: bool = False) -> bool:
         now = time.time()
         if not force and desired != self.effective and now - self.last_attempt < HID_RETRY_SECONDS:
             return False
@@ -164,16 +215,39 @@ class LedController:
 
         if self.baseline is None:
             self.baseline = self._read_baseline()
-        self._run(["--color", desired])
+        self._run(["--set-side", side_state_for(settings, desired)])
         self.effective = desired
         self.last_health_check = time.time()
         return True
 
-    def health_check(self, force: bool = False) -> bool:
-        """Reapply an active color when the keyboard has reset its side LEDs."""
-        expected = COLOR_SIDE_STATES.get(self.effective)
-        if expected is None:
+    def reapply(self, settings: Dict[str, Any]) -> bool:
+        if self.effective not in LIGHT_STATES:
             return False
+        self._run(["--set-side", side_state_for(settings, self.effective)])
+        self.last_health_check = time.time()
+        return True
+
+    def preview(self, state: str, settings: Dict[str, Any]) -> None:
+        if state not in LIGHT_STATES:
+            raise ValueError("unknown preview state: {}".format(state))
+        if self.baseline is None:
+            self.baseline = self._read_baseline()
+        self._run(["--set-side", side_state_for(settings, state)])
+
+    def restore_preview(self, settings: Dict[str, Any]) -> bool:
+        if self.effective in LIGHT_STATES:
+            return self.reapply(settings)
+        if self.baseline:
+            self._run(["--set-side", self.baseline])
+            self.baseline = None
+            return True
+        return False
+
+    def health_check(self, settings: Dict[str, Any], force: bool = False) -> bool:
+        """Reapply an active color when the keyboard has reset its side LEDs."""
+        if self.effective not in LIGHT_STATES:
+            return False
+        expected = side_state_for(settings, self.effective)
         now = time.time()
         if not force and now - self.last_health_check < HID_RECONNECT_CHECK_SECONDS:
             return False
@@ -182,7 +256,7 @@ class LedController:
         if actual == expected:
             self.record_hardware_result()
             return False
-        self._run(["--color", self.effective])
+        self._run(["--set-side", expected])
         self.record_hardware_result()
         return True
 
@@ -191,10 +265,14 @@ class CodexKick75Daemon:
     def __init__(self) -> None:
         saved = self._load_state()
         self.aggregator = StatusAggregator(saved.get("tasks", {}))
+        self.settings = SettingsManager()
         # The keyboard may have reset while the daemon was down, so force the
         # persisted aggregate state to be replayed on startup.
         self.controller = LedController(saved.get("baseline"), "unknown")
         self.stopping = False
+        self.logged_settings_error: Optional[str] = None
+        self.preview_status: Optional[str] = None
+        self.preview_until = 0.0
 
     @staticmethod
     def _load_state() -> Dict[str, Any]:
@@ -257,10 +335,12 @@ class CodexKick75Daemon:
 
     def _sync_lights(self, force: bool = False) -> None:
         desired = self.aggregator.effective()
+        if self.preview_status is not None:
+            self._cancel_preview(restore=desired == self.controller.effective)
         if not force and desired == self.controller.effective:
             return
         try:
-            changed = self.controller.apply(desired, force=force)
+            changed = self.controller.apply(desired, self.settings.settings, force=force)
             if changed:
                 self._log("effective={}; tasks={}".format(desired, len(self.aggregator.tasks)))
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
@@ -268,11 +348,35 @@ class CodexKick75Daemon:
             self._log("HID update failed for {}: {}".format(desired, error))
         self._save_state()
 
+    def _reload_settings(self, force: bool = False) -> bool:
+        changed = self.settings.reload(force=force)
+        if self.settings.error:
+            if self.settings.error != self.logged_settings_error:
+                self._log("settings reload failed: {}".format(self.settings.error))
+                self.logged_settings_error = self.settings.error
+            return False
+        self.logged_settings_error = None
+        if not changed:
+            return False
+        if self.preview_status is not None:
+            self._cancel_preview(restore=True)
+        try:
+            if self.controller.reapply(self.settings.settings):
+                self._log("reapplied {} after settings reload".format(self.controller.effective))
+                self._save_state()
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            self.controller.record_hardware_result(error)
+            self._log("HID update failed after settings reload: {}".format(error))
+            self._save_state()
+        return True
+
     def _check_hardware(self) -> None:
+        if self.preview_status is not None:
+            return
         if self.aggregator.effective() != self.controller.effective:
             return
         try:
-            if self.controller.health_check():
+            if self.controller.health_check(self.settings.settings):
                 self._log("reapplied {} after side-light reset".format(self.controller.effective))
                 self._save_state()
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
@@ -282,13 +386,76 @@ class CodexKick75Daemon:
                 self._log("HID health check failed: {}".format(error))
             self._save_state()
 
+    def _start_preview(
+        self,
+        state: str,
+        seconds: float,
+        color: Optional[str] = None,
+        brightness: Optional[int] = None,
+    ) -> None:
+        if state not in LIGHT_STATES:
+            raise ValueError("preview state must be one of: {}".format(", ".join(LIGHT_STATES)))
+        if not 0.5 <= seconds <= MAX_PREVIEW_SECONDS:
+            raise ValueError("preview seconds must be between 0.5 and 10")
+        preview_settings = {
+            "version": self.settings.settings["version"],
+            "states": {
+                key: dict(value)
+                for key, value in self.settings.settings["states"].items()
+            },
+        }
+        if color is not None:
+            preview_settings["states"][state]["color"] = color
+        if brightness is not None:
+            preview_settings["states"][state]["brightness"] = brightness
+        preview_settings = validate_settings(preview_settings)
+        self.controller.preview(state, preview_settings)
+        self.preview_status = state
+        self.preview_until = time.monotonic() + seconds
+
+    def _cancel_preview(self, restore: bool) -> None:
+        if self.preview_status is None:
+            return
+        preview_status = self.preview_status
+        if not restore:
+            self.preview_status = None
+            self.preview_until = 0.0
+            return
+        try:
+            if self.controller.restore_preview(self.settings.settings):
+                self._log("restored light after {} preview".format(preview_status))
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            self.controller.record_hardware_result(error)
+            self.preview_until = time.monotonic() + HID_RETRY_SECONDS
+            self._log("HID restore failed after preview: {}".format(error))
+            return
+        self.preview_status = None
+        self.preview_until = 0.0
+
+    def _finish_preview_if_needed(self) -> None:
+        if self.preview_status is None or time.monotonic() < self.preview_until:
+            return
+        self._cancel_preview(restore=True)
+        self._save_state()
+
     def _snapshot(self) -> Dict[str, Any]:
+        status = self.controller.effective
+        preview = None
+        if self.preview_status is not None:
+            preview = {
+                "status": self.preview_status,
+                "remaining_seconds": max(0.0, self.preview_until - time.monotonic()),
+            }
         return {
             "ok": True,
             "version": VERSION,
-            "light": self.controller.effective,
-            "desired_light": self.aggregator.effective(),
+            "status": status,
+            "desired_status": self.aggregator.effective(),
+            "light": self.settings.light(status),
             "tasks": len(self.aggregator.tasks),
+            "settings": str(self.settings.path),
+            "settings_error": self.settings.error,
+            "preview": preview,
             "hardware": {
                 "available": self.controller.hardware_available,
                 "error": self.controller.hardware_error,
@@ -344,6 +511,9 @@ class CodexKick75Daemon:
         signal.signal(signal.SIGTERM, request_stop)
         signal.signal(signal.SIGINT, request_stop)
         self.aggregator.expire()
+        if self.settings.error:
+            self._log("settings load failed; using defaults: {}".format(self.settings.error))
+            self.logged_settings_error = self.settings.error
         self._sync_lights(force=True)
         self._log("daemon started")
 
@@ -352,6 +522,8 @@ class CodexKick75Daemon:
                 try:
                     connection, _ = server.accept()
                 except socket.timeout:
+                    self._finish_preview_if_needed()
+                    self._reload_settings()
                     before = self.aggregator.effective()
                     self.aggregator.expire()
                     self._sync_lights(force=before != self.aggregator.effective())
@@ -365,6 +537,33 @@ class CodexKick75Daemon:
                         if command == "ping":
                             self._respond(connection, self._snapshot())
                             continue
+                        if command == "reload":
+                            self._cancel_preview(restore=True)
+                            self._reload_settings(force=True)
+                            if self.settings.error:
+                                self._respond(
+                                    connection,
+                                    {"ok": False, "error": self.settings.error},
+                                )
+                            else:
+                                self._respond(connection, self._snapshot())
+                            continue
+                        if command == "preview":
+                            preview_state = event.get("state")
+                            preview_seconds = event.get("seconds", DEFAULT_PREVIEW_SECONDS)
+                            try:
+                                if isinstance(preview_seconds, bool):
+                                    raise ValueError("preview seconds must be a number")
+                                self._start_preview(
+                                    preview_state,
+                                    float(preview_seconds),
+                                    event.get("color"),
+                                    event.get("brightness"),
+                                )
+                                self._respond(connection, self._snapshot())
+                            except (TypeError, ValueError, OSError, RuntimeError) as error:
+                                self._respond(connection, {"ok": False, "error": str(error)})
+                            continue
                         if command == "reset":
                             self.aggregator.tasks.clear()
                             self.aggregator.expire()
@@ -373,11 +572,13 @@ class CodexKick75Daemon:
                             continue
                         elif command is None:
                             self.aggregator.handle(event)
+                        self._reload_settings()
                         self.aggregator.expire()
                         self._sync_lights(force=True)
                         self._check_hardware()
         finally:
             try:
+                self._cancel_preview(restore=True)
                 self.aggregator.tasks.clear()
                 self._sync_lights(force=True)
             finally:

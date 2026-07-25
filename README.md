@@ -3,171 +3,320 @@
 [![CI](https://github.com/zzm20011015/codex-kick75-status-lights/actions/workflows/ci.yml/badge.svg)](https://github.com/zzm20011015/codex-kick75-status-lights/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-把 OpenAI Codex 的全局任务状态映射到 NuPhy Kick75 IO 的 5 颗侧灯。
+把 OpenAI Codex App 与 Codex CLI 的全局任务状态映射到 NuPhy Kick75 IO 的 5 颗侧灯。
 
-| 全局状态 | 侧灯 | 判定规则 |
+`0.2.0` 提供用户级后台服务和原生 macOS 菜单栏设置应用。四种任务状态可以分别设置 RGB 与亮度，
+配置保存后立即生效，也可以在保存前预览 3 秒。
+
+| 全局状态 | 默认侧灯 | 判定规则 |
 | --- | --- | --- |
-| 需要处理 | 红色 | 任一任务等待权限，或出现可识别的工具失败 |
+| 工具失败 | 红色 | 任一任务出现可识别的工具失败 |
+| 权限等待 | 红色 | 没有工具失败，但至少一个任务等待权限 |
 | 执行中 | 黄色 | 没有异常，且至少一个任务正在执行 |
 | 全部完成 | 绿色 | 所有仍被跟踪的任务均已完成 |
-| 空闲 | 原灯效 | 没有活跃任务；恢复接管前的侧灯配置 |
+| 空闲 | 原灯效 | 没有活跃任务，恢复接管前的侧灯配置 |
 
-多个 Codex 任务按 `session_id` 独立跟踪，全局优先级为：
+全局优先级为：
 
 ```text
-红色 > 黄色 > 绿色 > 原灯效
+工具失败 > 权限等待 > 执行中 > 全部完成 > 原灯效
 ```
 
-绿色默认保持 10 秒，然后自动恢复键盘原来的侧灯效果。
+完成状态默认保持 10 秒，然后自动恢复键盘原来的侧灯效果。
 
 > [!IMPORTANT]
-> 当前版本仅验证了 macOS + NuPhy Kick75 IO（USB VID/PID `19f5:1026`）。
-> 任意 RGB 控制依赖 USB 原始 HID，蓝牙连接不能使用本项目的灯光控制功能。
+> 当前只验证了 macOS + NuPhy Kick75 IO（USB VID/PID `19f5:1026`）。任意 RGB 控制依赖 USB
+> Raw HID，蓝牙连接无法使用本项目的灯光控制功能。
 
-## 功能特点
+## 功能概览
 
-- 汇总 Codex App 和 Codex CLI 的多个并行任务。
-- 通过一个用户级后台进程串行访问 USB HID，避免多个 Hook 争用键盘。
-- 首次接管灯光时读取并保存原侧灯状态；空闲或服务停止时自动恢复。
-- 活跃状态下定期读回侧灯；USB 重连或键盘复位灯效后自动恢复当前状态色。
-- Hook 只向本机守护进程发送事件名、任务 ID、轮次 ID 和失败布尔值。
-- 不传输或记录用户提示词、工具参数、工具输出正文。
-- 不修改主键区灯效、键盘固件或键盘持久化设置。
-- 安装时合并 `~/.codex/hooks.json`，不会覆盖已有的其他 Hooks。
-- 支持安装、状态检查、手动复位、硬件测试和卸载。
-- 无第三方 Python 依赖。
+- 汇总多个 Codex App 与 Codex CLI 任务，不会让并行任务互相覆盖状态。
+- 使用一个用户级 LaunchAgent 串行访问键盘，避免多个 Hook 争用 USB HID。
+- 自动保存并恢复接管前的侧灯效果。
+- USB 重连或键盘复位灯效后，自动恢复当前任务状态色。
+- 分别配置执行中、权限等待、工具失败、全部完成的颜色与亮度。
+- 原生 macOS 菜单栏应用，支持系统取色器、十六进制输入、亮度滑块和 3 秒预览。
+- 配置热加载，无需重启后台服务或 Codex。
+- Hook 只传递事件名、任务 ID、轮次 ID 和失败布尔值，不传输提示词或工具正文。
+- 不修改主键区灯效、键位、固件或键盘持久化配置。
 
-## 工作原理
+## 部署要求
 
-```mermaid
-flowchart LR
-    A["Codex 任务 A"] --> H["Codex Hooks"]
-    B["Codex 任务 B"] --> H
-    C["Codex 任务 N"] --> H
-    H --> P["本地 Hook 客户端<br/>过滤敏感字段"]
-    P -->|"Unix socket"| D["全局状态守护进程"]
-    D --> G["红 > 黄 > 绿 > 原灯效"]
-    G --> Ctl["kick75_ledctl"]
-    Ctl -->|"USB Raw HID"| K["Kick75 五颗侧灯"]
-```
-
-Codex Hook 事件与本项目状态的映射：
-
-| Hook | 任务状态变化 |
+| 项目 | 要求 |
 | --- | --- |
-| `UserPromptSubmit` | 任务进入执行中 |
-| `PermissionRequest` | 任务进入需要处理状态 |
-| `PostToolUse` | 显式失败时标红；成功时回到执行中 |
-| `Stop` | 无粘性错误时标记完成 |
-| `SessionEnd` | 从跟踪列表移除任务 |
+| 操作系统 | macOS；菜单栏应用要求 macOS 13 或更高版本 |
+| 键盘 | NuPhy Kick75 IO，USB VID/PID `19f5:1026` |
+| 连接方式 | 支持数据传输的 USB 线，不能只连接蓝牙 |
+| Python | Python 3.9 或更高版本；可使用 macOS 自带的 `/usr/bin/python3` |
+| 编译工具 | Xcode Command Line Tools，提供 `clang`、`swift` 和 `codesign` |
+| Codex | 支持生命周期 Hooks 的 Codex App 或 Codex CLI |
 
-官方 Hook 输入包含 `session_id` 和 `turn_id`，详见
-[Codex Hooks 文档](https://learn.chatgpt.com/docs/hooks)。
-
-## 环境要求
-
-- macOS。
-- NuPhy Kick75 IO，USB VID/PID 为 `0x19f5:0x1026`。
-- 键盘通过 USB 数据线连接，而不是仅使用蓝牙。
-- Python 3.9 或更高版本；macOS 自带的 `/usr/bin/python3` 可用。
-- Xcode Command Line Tools，用于编译 C 语言 HID 控制器。
-- 支持生命周期 Hooks 的 Codex CLI/App。
-
-检查编译器：
+检查编译环境：
 
 ```bash
 clang --version
+swift --version
 ```
 
-如果没有 `clang`：
+如果命令不存在，安装 Command Line Tools：
 
 ```bash
 xcode-select --install
 ```
 
-## 快速部署
+## 全新安装
 
-### 1. 获取项目
+### 1. 下载项目
 
 ```bash
 git clone https://github.com/zzm20011015/codex-kick75-status-lights.git
 cd codex-kick75-status-lights
 ```
 
-### 2. 先做可恢复硬件测试
+### 2. 先测试键盘连接
+
+保持键盘通过 USB 连接，然后执行：
 
 ```bash
 /usr/bin/python3 scripts/install.py test-hid
 ```
 
-预期结果：5 颗侧灯变成绿色约 5 秒，然后恢复测试前的侧灯效果。
+预期现象：5 颗侧灯变成绿色约 5 秒，随后恢复测试前的灯效。这个测试不会修改主键区灯效、键位或
+固件。如果侧灯没有变化，请先查看[故障排查](#故障排查)，不要继续安装。
 
-该测试不会修改主键区灯效或固件。如果灯没有变化，请先查看
-[故障排查](#故障排查)。
-
-### 3. 安装
+### 3. 安装后台服务与 Codex Hooks
 
 ```bash
 /usr/bin/python3 scripts/install.py install
 ```
 
-安装器会自动完成：
+安装器会：
 
-1. 使用 `clang` 编译 `src/kick75_ledctl.c`。
-2. 把运行文件安装到 `~/Library/Application Support/CodexKick75/`。
-3. 创建用户级 LaunchAgent：
-   `~/Library/LaunchAgents/com.zzm.codex-kick75.plist`。
-4. 合并全局 Codex Hooks 到 `~/.codex/hooks.json`。
-5. 启动后台状态守护进程。
+1. 使用 `clang` 编译 HID 控制器。
+2. 创建 `~/Library/Application Support/CodexKick75/`。
+3. 首次安装时创建 `settings.json`；升级时校验并保留已有配置。
+4. 安装并启动用户级 LaunchAgent。
+5. 把 5 个生命周期 Hook 合并到 `~/.codex/hooks.json`。
+6. 在修改已有 `hooks.json` 前创建带时间戳的备份。
 
-如果 `hooks.json` 已存在，修改前会创建带时间戳的备份。
-
-### 4. 让 Codex 加载 Hooks
-
-完全退出 Codex App（`Command + Q`），然后重新打开。不要只关闭窗口。
-
-也可以打开 Codex CLI：
+安装完成后检查状态：
 
 ```bash
-codex
+/usr/bin/python3 scripts/install.py status
 ```
 
-进入 CLI 后运行：
+后台服务成功时会显示类似结果：
+
+```text
+service: running (version 0.2.0)
+hooks:   5/5 installed
+status:  idle
+tasks:   0
+hardware: unknown
+settings: /Users/me/Library/Application Support/CodexKick75/settings.json
+```
+
+后台服务尚未接管灯光时，`hardware: unknown` 是正常状态。
+
+### 4. 安装菜单栏应用
+
+```bash
+/usr/bin/python3 scripts/install.py install-app
+```
+
+该命令会编译、临时签名并安装：
+
+```text
+~/Applications/Codex Kick75.app
+```
+
+首次启动：
+
+```bash
+open "$HOME/Applications/Codex Kick75.app"
+```
+
+应用启动后，键盘图标会出现在系统菜单栏，不会显示在 Dock 中。应用当前不会自动设置为登录项；重启
+Mac 后需要重新打开。退出应用可使用设置面板底部的“退出”按钮。
+
+如果只需要生成 `.app`，不安装到用户目录：
+
+```bash
+/usr/bin/python3 scripts/install.py build-app
+```
+
+构建产物位于：
+
+```text
+build/Codex Kick75.app
+```
+
+### 5. 重新启动 Codex
+
+使用 `Command + Q` 完全退出 Codex App，然后重新打开。只关闭窗口不会重新加载 Hooks。
+
+在 Codex CLI 中可以运行：
 
 ```text
 /hooks
 ```
 
-核心事件应显示 `Installed 1` 和 `Active 1`：
+以下事件应显示 `Installed 1` 和 `Active 1`：
 
 - `UserPromptSubmit`
 - `PermissionRequest`
 - `PostToolUse`
 - `Stop`
+- `SessionEnd`
 
-如果 Codex 要求审查或信任 Hook，请确认命令指向：
+如果 Codex 要求审查 Hook，请确认命令指向：
 
 ```text
-/Users/<你的用户名>/Library/Application Support/CodexKick75/codex_kick75_hook.py
+/Users/<用户名>/Library/Application Support/CodexKick75/codex_kick75_hook.py
 ```
 
-### 5. 验证真实任务
+### 6. 验证真实任务
 
-在 Codex 中提交：
+在 Codex 中提交一个会持续数秒的任务，例如：
 
 ```text
 请执行 sleep 8，完成后只回复“测试完成”
 ```
 
-预期灯光顺序：
+使用默认配置时，预期顺序为：
 
 ```text
 黄色约 8 秒 → 绿色约 10 秒 → 恢复原灯效
 ```
 
-## 常用命令
+## 从旧版本升级
 
-所有管理操作都通过同一个脚本完成：
+进入项目目录并拉取最新代码：
+
+```bash
+git pull
+```
+
+重新安装后台服务和菜单栏应用：
+
+```bash
+/usr/bin/python3 scripts/install.py install
+/usr/bin/python3 scripts/install.py install-app
+```
+
+升级会保留有效的 `settings.json`，更新运行文件、LaunchAgent 和菜单栏应用。已有 Codex Hooks 会先去重
+再合并，不会重复追加；其他项目的 Hook 不会被删除。
+
+升级完成后使用 `Command + Q` 退出并重新打开 Codex，然后检查：
+
+```bash
+/usr/bin/python3 scripts/install.py status
+```
+
+## 使用菜单栏应用
+
+菜单栏面板包含四张状态卡片：执行中、等待权限、工具失败和已完成。
+
+- 点击颜色控件使用 macOS 系统取色器。
+- 也可以直接输入 `#RRGGBB`；非法格式会即时提示，并禁用预览和保存。
+- 亮度范围为 `0%` 到 `100%`。
+- “预览”会把未保存的颜色显示 3 秒，然后自动恢复。
+- “保存并应用”会原子写入配置，并通知后台服务立即加载。
+- “恢复默认”会恢复四种状态的默认值并保存。
+- “重新读取”会丢弃面板中的未保存修改，重新读取磁盘配置。
+
+预览要求后台服务正在运行，且键盘通过 USB 连接。保存配置不要求键盘在线；如果后台服务暂时不可用，
+配置仍会保留，并在服务下次启动时加载。
+
+## 使用命令行配置
+
+查看当前配置：
+
+```bash
+/usr/bin/python3 scripts/install.py config
+```
+
+修改颜色和亮度：
+
+```bash
+/usr/bin/python3 scripts/install.py config \
+  --state running \
+  --color '#7C3AED' \
+  --brightness 80
+
+/usr/bin/python3 scripts/install.py config \
+  --state permission \
+  --color '#FF7A00'
+
+/usr/bin/python3 scripts/install.py config \
+  --state failure \
+  --color '#FF0033'
+
+/usr/bin/python3 scripts/install.py config \
+  --state completed \
+  --color '#00D084' \
+  --brightness 60
+```
+
+| 状态参数 | 含义 | 默认值 |
+| --- | --- | --- |
+| `running` | 正在执行 | `#FFB400`，100% |
+| `permission` | 等待权限 | `#FF0000`，100% |
+| `failure` | 工具失败 | `#FF0000`，100% |
+| `completed` | 全部完成 | `#00FF00`，100% |
+
+颜色必须为 `#RRGGBB`，亮度必须是 `0` 到 `100` 的整数。
+
+恢复默认配置：
+
+```bash
+/usr/bin/python3 scripts/install.py config --reset
+```
+
+配置文件位置：
+
+```text
+~/Library/Application Support/CodexKick75/settings.json
+```
+
+配置使用版本化 JSON 格式：
+
+```json
+{
+  "version": 1,
+  "states": {
+    "running": {"color": "#FFB400", "brightness": 100},
+    "permission": {"color": "#FF0000", "brightness": 100},
+    "failure": {"color": "#FF0000", "brightness": 100},
+    "completed": {"color": "#00FF00", "brightness": 100}
+  }
+}
+```
+
+非法配置不会覆盖后台服务内存中的最后一个有效版本。错误会写入日志，并显示在 `status` 和菜单栏应用中。
+
+## 自定义运行参数
+
+安装时可以调整完成状态保持时间、陈旧任务超时和 USB 重连检查间隔：
+
+```bash
+/usr/bin/python3 scripts/install.py install \
+  --completed-hold 15 \
+  --stale-task-hours 6 \
+  --reconnect-check 10
+```
+
+| 参数 | 默认值 | 作用 |
+| --- | --- | --- |
+| `--completed-hold` | `10` 秒 | 全部完成后保持完成颜色的时间 |
+| `--stale-task-hours` | `12` 小时 | 清理没有正常结束的陈旧任务 |
+| `--reconnect-check` | `10` 秒 | 活跃状态下检查侧灯是否被 USB 重连复位 |
+
+`--green-hold` 是 `--completed-hold` 的兼容别名。修改参数后会更新 LaunchAgent 并重启后台服务。
+
+## 管理命令
+
+所有管理操作通过同一个脚本完成：
 
 ```bash
 /usr/bin/python3 scripts/install.py <command>
@@ -176,76 +325,32 @@ codex
 | 命令 | 作用 |
 | --- | --- |
 | `build` | 仅编译 HID 控制器 |
-| `install` | 编译并安装/更新服务和 Hooks |
-| `status` | 查看服务、Hook、当前灯色和任务数 |
-| `reset` | 清空陈旧任务并恢复接管前的侧灯效果 |
-| `test-hid` | 绿色 5 秒硬件测试，然后自动恢复 |
-| `uninstall` | 移除本项目 Hooks、LaunchAgent 和运行文件 |
+| `build-app` | 构建本机架构的菜单栏应用 |
+| `install` | 安装或升级后台服务与 Hooks |
+| `install-app` | 构建并安装菜单栏应用 |
+| `status` | 查看服务、Hooks、任务、灯色、键盘与配置状态 |
+| `config` | 查看或修改颜色与亮度 |
+| `reset` | 清空跟踪任务并恢复接管前的侧灯效果 |
+| `test-hid` | 执行可恢复的绿色 5 秒硬件测试 |
+| `uninstall` | 移除服务、Hooks、运行文件和菜单栏应用 |
 
-也可以使用 Make：
+对应的 Make 命令：
 
 ```bash
 make build
+make build-app
 make test
+make test-app
 make install
+make install-app
 make status
+make config
 make reset
 make test-hid
 make uninstall
 ```
 
-## 自定义计时
-
-安装时可以调整完成绿灯时长和陈旧任务超时：
-
-```bash
-/usr/bin/python3 scripts/install.py install \
-  --green-hold 15 \
-  --stale-task-hours 6 \
-  --reconnect-check 10
-```
-
-- `--green-hold`：全部完成后保持绿色的秒数，默认 `10`。
-- `--stale-task-hours`：Codex 异常退出且没有发送结束事件时，任务自动过期的小时数，默认 `12`。
-- `--reconnect-check`：活跃状态下检查侧灯是否被 USB 重连等操作复位的间隔秒数，默认 `10`。
-
-重新运行 `install` 会更新 LaunchAgent 并重启服务。
-
-## 多任务汇总示例
-
-| 任务 A | 任务 B | 全局灯色 |
-| --- | --- | --- |
-| 执行中 | 执行中 | 黄色 |
-| 已完成 | 执行中 | 黄色 |
-| 已完成 | 等待权限 | 红色 |
-| 执行中 | 工具失败 | 红色 |
-| 已完成 | 已完成 | 绿色 |
-| 无活跃任务 | 无活跃任务 | 原灯效 |
-
-红色是粘性状态：如果任务在等待权限或工具明确失败，`Stop` 不会立即把它改成绿色。
-同一任务重新提交提示词，或后续工具成功执行后，会回到黄色。
-
-## 查看运行状态
-
-```bash
-/usr/bin/python3 scripts/install.py status
-```
-
-示例：
-
-```text
-service: running (version 0.1.1)
-hooks:   5/5 installed
-light:   yellow
-tasks:   2
-hardware: connected
-state:   /Users/me/Library/Application Support/CodexKick75/state.json
-```
-
-`status` 会通过 Unix socket 实际 ping 守护进程，而不只是检查 socket 文件是否存在。
-键盘尚未被本次守护进程访问时，`hardware` 可能显示 `unknown`；访问失败时显示 `unavailable`。
-
-运行文件和诊断信息位于：
+## 运行文件
 
 ```text
 ~/Library/Application Support/CodexKick75/
@@ -254,8 +359,18 @@ state:   /Users/me/Library/Application Support/CodexKick75/state.json
 ├── codex_kick75_hook.py
 ├── kick75_ledctl
 ├── daemon.log
+├── daemon.log.1
+├── settings.json
 ├── state.json
 └── status.sock
+```
+
+其他安装位置：
+
+```text
+~/Library/LaunchAgents/com.zzm.codex-kick75.plist
+~/Applications/Codex Kick75.app
+~/.codex/hooks.json
 ```
 
 查看日志：
@@ -264,84 +379,76 @@ state:   /Users/me/Library/Application Support/CodexKick75/state.json
 tail -f "$HOME/Library/Application Support/CodexKick75/daemon.log"
 ```
 
-日志最多约 1 MiB，超过后轮换为 `daemon.log.1`。日志只记录聚合灯色、任务数量和硬件错误，
-不记录提示词或工具内容。
+日志超过约 1 MiB 后轮换为 `daemon.log.1`。日志只记录聚合状态、任务数量和硬件错误，不记录提示词、
+工具参数或工具输出正文。
 
 ## 故障排查
 
-### `/hooks` 显示 Active 0
+### `status` 显示服务未运行
 
-1. 确认项目所在目录已被 Codex 信任。
+重新执行安装：
+
+```bash
+/usr/bin/python3 scripts/install.py install
+```
+
+如果仍未启动，检查 LaunchAgent 日志：
+
+```bash
+tail -n 100 "$HOME/Library/Application Support/CodexKick75/daemon.log"
+```
+
+### `/hooks` 显示 `Active 0`
+
+1. 确认项目目录已被 Codex 信任。
 2. 确认 `~/.codex/hooks.json` 存在。
 3. 在 `/hooks` 中审查并信任本项目 Hook。
-4. 使用 `Command + Q` 完全退出 Codex App，然后重新打开。
+4. 使用 `Command + Q` 完全退出并重新打开 Codex App。
 
-Hooks 默认启用；如果配置中显式关闭过，请删除该覆盖，或设置：
+如果配置中显式关闭过 Hooks，请删除覆盖项，或设置：
 
 ```toml
 [features]
 hooks = true
 ```
 
-### Hooks Active 1，但灯不变
+### Hooks 正常，但侧灯没有变化
 
-检查后台服务：
-
-```bash
-/usr/bin/python3 scripts/install.py status
-```
-
-如果服务未运行，重新安装：
-
-```bash
-/usr/bin/python3 scripts/install.py install
-```
-
-确认键盘是 USB 连接，并关闭其他可能同时访问 NuPhy 原始 HID 的灯效程序。
-
-如果任务执行期间重新插拔键盘，守护进程会在下一个 `--reconnect-check` 周期自动恢复状态灯，
-无需重新提交任务。
-
-### 灯一直是黄色或红色
-
-Codex 可能异常退出，没有发送 `Stop` 或 `SessionEnd`。安全复位：
-
-```bash
-/usr/bin/python3 scripts/install.py reset
-```
-
-这会清空内存中的任务状态并恢复最初保存的侧灯配置。
+- 确认键盘使用 USB 数据线连接，而不是仅连接蓝牙。
+- 退出 NuPhyIO 或其他可能同时访问 Raw HID 的灯效程序。
+- 运行 `/usr/bin/python3 scripts/install.py test-hid` 单独验证硬件。
+- 运行 `/usr/bin/python3 scripts/install.py status` 查看 `hardware` 字段。
 
 ### `Kick75 IO not found`
 
 - 更换支持数据传输的 USB 线。
 - 重新插拔键盘。
-- 确认设备 VID/PID 是 `19f5:1026`。
-- 确认不是仅通过蓝牙连接。
-
-可用系统命令查看 USB 设备：
-
-```bash
-system_profiler SPUSBDataType
-```
+- 确认设备 VID/PID 为 `19f5:1026`。
+- 使用 `system_profiler SPUSBDataType` 检查系统是否识别设备。
 
 ### `raw HID open failed`
 
-- 退出 NuPhyIO 或其他键盘配置程序后重试。
+- 退出 NuPhyIO 和其他键盘配置程序。
 - 重新插拔键盘。
-- 检查 LaunchAgent 日志：
+- 检查 `daemon.log` 中的具体错误。
+
+### 灯一直停在黄色或红色
+
+Codex 可能异常退出，没有发送 `Stop` 或 `SessionEnd`。执行安全复位：
 
 ```bash
-tail -n 100 "$HOME/Library/Application Support/CodexKick75/daemon.log"
+/usr/bin/python3 scripts/install.py reset
 ```
 
-### 安装时找不到 clang
+### 菜单栏应用显示后台服务不可用
+
+菜单栏应用只负责设置界面，不会代替后台服务。先运行：
 
 ```bash
-xcode-select --install
+/usr/bin/python3 scripts/install.py status
 ```
 
-安装 Command Line Tools 后重新运行安装命令。
+如果服务未运行，重新执行 `install`。配置仍然可以保存，并会在后台服务下次启动时加载。
 
 ## 卸载
 
@@ -351,109 +458,97 @@ xcode-select --install
 
 卸载器会：
 
-1. 只从 `~/.codex/hooks.json` 移除包含 `codex_kick75_hook.py` 的条目。
+1. 只移除 `~/.codex/hooks.json` 中属于本项目的 Hook。
 2. 保留其他项目和插件的 Hooks。
-3. 停止 LaunchAgent；停止过程中恢复接管前的侧灯效果。
-4. 删除本项目安装到 `~/Library/Application Support/CodexKick75/` 的运行文件。
-5. 修改 Hooks 前保留时间戳备份。
+3. 停止并删除 LaunchAgent。
+4. 尝试恢复接管前的侧灯效果。
+5. 删除 `~/Library/Application Support/CodexKick75/`。
+6. 删除 `~/Applications/Codex Kick75.app`。
+7. 保留已创建的 `hooks.json` 时间戳备份。
 
-卸载后完全退出并重新打开 Codex。
+卸载后使用 `Command + Q` 完全退出并重新打开 Codex。
+
+## 工作原理与隐私
+
+```mermaid
+flowchart LR
+    A["Codex App / CLI"] --> H["生命周期 Hooks"]
+    H --> C["本地 Hook 客户端"]
+    C -->|"Unix socket"| D["用户级后台服务"]
+    M["菜单栏设置应用"] -->|"配置 / 预览"| D
+    D --> G["失败 > 权限 > 执行 > 完成 > 空闲"]
+    G --> K["Kick75 USB Raw HID"]
+```
+
+Hook 客户端只保留：
+
+- Hook 事件名。
+- `session_id`。
+- `turn_id`。
+- 工具是否明确失败的布尔值。
+
+提示词、工具参数和工具输出正文不会写入状态文件或后台日志。菜单栏应用与后台服务只通过当前用户可
+访问的 Unix socket 和权限为 `0600` 的配置文件通信。
+
+HID 协议细节见 [docs/PROTOCOL.md](docs/PROTOCOL.md)。
 
 ## 开发与测试
 
-项目没有第三方运行时依赖。
+运行完整构建和测试：
 
 ```bash
 make all
 ```
 
-等价于：
+该命令会：
+
+1. 使用 `-Wall -Wextra -Werror` 编译 C HID 控制器。
+2. 运行 27 项 Python 单元与协议测试。
+3. 运行无第三方依赖的 Swift 核心自检。
+4. 构建并验证临时签名的 release `.app`。
+
+单独运行：
 
 ```bash
-/usr/bin/python3 scripts/install.py build
-PYTHONPYCACHEPREFIX=/tmp/codex-kick75-pycache \
-  /usr/bin/python3 -m unittest discover -s tests -v
+make test
+make test-app
+make build-app
 ```
 
-测试覆盖：
+## 已知限制
 
-- 多任务红、黄、绿优先级。
-- 红色粘性状态和成功恢复。
-- 完成任务自动过期。
-- `SessionEnd` 清理。
-- USB 重连或侧灯复位后的状态色自动重放。
-- Unix socket 半开连接超时与 ping 响应。
-- 损坏或结构异常的状态文件容错。
-- Hook 数据最小化，避免传递提示词和工具正文。
-- 安装器合并 Hooks 时保留已有配置。
-- 卸载器只删除本项目 Hook。
+- 当前只支持 macOS 和 Kick75 IO `19f5:1026`。
+- 菜单栏应用要求 macOS 13 或更高版本。
+- `.app` 构建产物只包含执行构建的 Mac 所使用的架构。
+- 5 颗侧灯作为一个整体显示同一状态，不支持逐灯任务映射。
+- 蓝牙接口不提供本项目所需的任意 RGB 写入通道。
+- 菜单栏应用暂未自动注册为 macOS 登录项。
+- Codex `Stop` Hook 不提供完整的 completed/failed 枚举，项目只能依据权限事件和工具显式失败字段
+  判断异常状态。
+- NuPhy 固件或 NuPhyIO 协议更新可能改变 HID 数据格式。
 
 ## 项目结构
 
 ```text
 .
+├── macos-app/                 # SwiftUI 菜单栏应用和 Swift 核心
+├── src/                       # Python 后台服务、Hook 和 C HID 控制器
+├── scripts/install.py         # 构建、安装、配置、诊断和卸载入口
+├── tests/                     # Python 单元与协议测试
+├── docs/PROTOCOL.md           # Kick75 HID 协议说明
 ├── Makefile
-├── README.md
 ├── CHANGELOG.md
-├── .github/workflows/ci.yml
-├── docs/
-│   └── PROTOCOL.md
-├── research/
-│   ├── extract-webpack-module.mjs
-│   └── inspect-nuphy-light-api.mjs
-├── scripts/
-│   ├── install.py
-│   └── send_test_event.py
-├── src/
-│   ├── codex_kick75_common.py
-│   ├── codex_kick75_daemon.py
-│   ├── codex_kick75_hook.py
-│   └── kick75_ledctl.c
-└── tests/
-    ├── test_common.py
-    ├── test_daemon.py
-    └── test_installer.py
+└── README.md
 ```
-
-`research/` 中的脚本仅用于还原 NuPhyIO 灯光数据结构，不参与安装或运行。
-协议说明见 [docs/PROTOCOL.md](docs/PROTOCOL.md)。
-
-## 已知限制
-
-- 目前只支持 macOS。
-- 目前只验证 Kick75 IO `19f5:1026`。
-- 5 颗侧灯作为一个整体显示同一状态，未做逐灯任务映射。
-- 蓝牙 HID 没有本项目所需的任意 RGB 写入通道，因此必须使用 USB。
-- Codex `Stop` Hook 不提供明确的 `completed/failed` 枚举。本项目通过
-  `PermissionRequest` 和 `PostToolUse` 的显式失败字段判断红色，不能识别所有自然语言层面的阻塞。
-- NuPhy 固件或 NuPhyIO 协议更新可能改变 HID 数据格式。
 
 ## 安全说明
 
-本项目仅发送以下已验证的灯光相关 HID 命令：
+本项目只发送经过验证的灯光相关 HID 命令：建立临时会话、读取灯光状态、写入侧灯 8 字节状态。不会
+发送固件升级、恢复出厂、键位映射、主键区灯光写入或未知命令。
 
-- 建立临时会话密钥。
-- 读取灯光状态。
-- 写入侧灯 8 字节状态。
-
-不会发送固件升级、恢复出厂、键位映射或未知命令。即便如此，这是非官方工具；请自行承担使用风险。
-建议首次部署前先执行 `test-hid`。
-
-本项目与 OpenAI、NuPhy 无隶属或官方合作关系。Codex 和 NuPhy 是各自所有者的商标。
+这是非官方工具，与 OpenAI、NuPhy 无隶属或官方合作关系。首次部署前请先执行 `test-hid`，并自行承担
+使用非官方 HID 控制工具的风险。
 
 ## License
 
-本项目采用 [MIT License](LICENSE) 开源。
-
-你可以自由使用、复制、修改、合并、发布、分发、再许可和销售本项目代码，
-但必须在副本或主要部分中保留原版权声明和 MIT 许可证文本。
-
-## 问题反馈与贡献
-
-- Bug、兼容性问题和功能建议请提交到
-  [GitHub Issues](https://github.com/zzm20011015/codex-kick75-status-lights/issues)。
-- 提交问题时，请附上 macOS 版本、键盘型号、USB VID/PID、Codex 版本和相关错误日志；
-  请先删除日志中可能包含的个人路径或任务 ID。
-- 欢迎 Fork 仓库并提交 Pull Request。提交前请运行 `make all`，确保 C 编译和全部测试通过。
-
-仓库已通过 `.gitignore` 排除 macOS `._*` 元数据、编译产物、Python 缓存和运行日志。
+本项目使用 [MIT License](LICENSE)。

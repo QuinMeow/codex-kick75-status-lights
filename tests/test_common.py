@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 import pathlib
 import sys
+import tempfile
 import unittest
 
 
@@ -38,6 +39,35 @@ class CommonTests(unittest.TestCase):
                 {"content": [{"result": {"exit_code": 0, "ok": True}}]}
             )
         )
+
+    def test_settings_are_normalized_and_encoded_as_side_state(self):
+        settings = codex_kick75_common.default_settings()
+        settings["states"]["running"] = {"color": "#123abc", "brightness": 42}
+        normalized = codex_kick75_common.validate_settings(settings)
+        self.assertEqual(normalized["states"]["running"]["color"], "#123ABC")
+        self.assertEqual(
+            codex_kick75_common.side_state_for(normalized, "running"),
+            "022a010000123abc",
+        )
+
+    def test_settings_reject_invalid_color_and_brightness(self):
+        settings = codex_kick75_common.default_settings()
+        settings["states"]["running"]["color"] = "red"
+        with self.assertRaises(ValueError):
+            codex_kick75_common.validate_settings(settings)
+        settings = codex_kick75_common.default_settings()
+        settings["states"]["running"]["brightness"] = 101
+        with self.assertRaises(ValueError):
+            codex_kick75_common.validate_settings(settings)
+
+    def test_settings_round_trip_uses_private_file_permissions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / "settings.json"
+            codex_kick75_common.save_settings(codex_kick75_common.default_settings(), path)
+            loaded = codex_kick75_common.load_settings(path)
+            self.assertEqual(loaded, codex_kick75_common.default_settings())
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(path.parent.glob(".settings.json-*.tmp")), [])
 
 
 if __name__ == "__main__":
