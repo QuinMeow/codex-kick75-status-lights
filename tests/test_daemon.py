@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: MIT
 import importlib.util
+import json
 import pathlib
+import socket
+import tempfile
 import unittest
 import sys
+from unittest import mock
 
 
 MODULE_PATH = pathlib.Path(__file__).parents[1] / "src" / "codex_kick75_daemon.py"
@@ -81,6 +85,68 @@ class LedControllerTests(unittest.TestCase):
         controller = MODULE.LedController()
         controller._run = lambda _arguments: "debug output\nSIDE_STATE=0064010100e9fffb\n"
         self.assertEqual(controller._read_baseline(), "0064010100e9fffb")
+
+    def test_health_check_reapplies_color_after_keyboard_reset(self):
+        controller = MODULE.LedController(baseline="0064010100e9fffb", effective="yellow")
+        calls = []
+
+        def run(arguments):
+            calls.append(arguments)
+            if arguments == ["--get-side"]:
+                return "SIDE_STATE=0064010100e9fffb\n"
+            return ""
+
+        controller._run = run
+        self.assertTrue(controller.health_check(force=True))
+        self.assertEqual(calls, [["--get-side"], ["--color", "yellow"]])
+
+    def test_health_check_does_not_rewrite_matching_color(self):
+        controller = MODULE.LedController(baseline="0064010100e9fffb", effective="green")
+        calls = []
+
+        def run(arguments):
+            calls.append(arguments)
+            return "SIDE_STATE=026401000000ff00\n"
+
+        controller._run = run
+        self.assertFalse(controller.health_check(force=True))
+        self.assertEqual(calls, [["--get-side"]])
+
+
+class DaemonProtocolIntegrationTests(unittest.TestCase):
+    def test_stalled_client_times_out_and_ping_response_is_valid(self):
+        daemon = object.__new__(MODULE.CodexKick75Daemon)
+        daemon.aggregator = MODULE.StatusAggregator()
+        daemon.controller = MODULE.LedController(effective="idle")
+
+        server, stalled = socket.socketpair()
+        server.settimeout(0.01)
+        try:
+            stalled.sendall(b'{"command"')
+            self.assertIsNone(daemon._receive(server))
+        finally:
+            server.close()
+            stalled.close()
+
+        server, client = socket.socketpair()
+        client.settimeout(1.0)
+        try:
+            self.assertTrue(daemon._respond(server, daemon._snapshot()))
+            response = json.loads(client.recv(65536).decode("utf-8"))
+        finally:
+            server.close()
+            client.close()
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["version"], "0.1.1")
+        self.assertEqual(response["light"], "idle")
+        self.assertEqual(response["tasks"], 0)
+
+    def test_corrupt_state_is_ignored_on_startup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = pathlib.Path(temporary) / "state.json"
+            state_path.write_text("not-json", encoding="utf-8")
+            with mock.patch.object(MODULE, "STATE_PATH", state_path):
+                self.assertEqual(MODULE.CodexKick75Daemon._load_state(), {})
 
 
 if __name__ == "__main__":

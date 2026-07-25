@@ -29,6 +29,7 @@
 - 汇总 Codex App 和 Codex CLI 的多个并行任务。
 - 通过一个用户级后台进程串行访问 USB HID，避免多个 Hook 争用键盘。
 - 首次接管灯光时读取并保存原侧灯状态；空闲或服务停止时自动恢复。
+- 活跃状态下定期读回侧灯；USB 重连或键盘复位灯效后自动恢复当前状态色。
 - Hook 只向本机守护进程发送事件名、任务 ID、轮次 ID 和失败布尔值。
 - 不传输或记录用户提示词、工具参数、工具输出正文。
 - 不修改主键区灯效、键盘固件或键盘持久化设置。
@@ -200,11 +201,13 @@ make uninstall
 ```bash
 /usr/bin/python3 scripts/install.py install \
   --green-hold 15 \
-  --stale-task-hours 6
+  --stale-task-hours 6 \
+  --reconnect-check 10
 ```
 
 - `--green-hold`：全部完成后保持绿色的秒数，默认 `10`。
 - `--stale-task-hours`：Codex 异常退出且没有发送结束事件时，任务自动过期的小时数，默认 `12`。
+- `--reconnect-check`：活跃状态下检查侧灯是否被 USB 重连等操作复位的间隔秒数，默认 `10`。
 
 重新运行 `install` 会更新 LaunchAgent 并重启服务。
 
@@ -231,12 +234,16 @@ make uninstall
 示例：
 
 ```text
-service: running
+service: running (version 0.1.1)
 hooks:   5/5 installed
 light:   yellow
 tasks:   2
+hardware: connected
 state:   /Users/me/Library/Application Support/CodexKick75/state.json
 ```
+
+`status` 会通过 Unix socket 实际 ping 守护进程，而不只是检查 socket 文件是否存在。
+键盘尚未被本次守护进程访问时，`hardware` 可能显示 `unknown`；访问失败时显示 `unavailable`。
 
 运行文件和诊断信息位于：
 
@@ -291,6 +298,9 @@ hooks = true
 ```
 
 确认键盘是 USB 连接，并关闭其他可能同时访问 NuPhy 原始 HID 的灯效程序。
+
+如果任务执行期间重新插拔键盘，守护进程会在下一个 `--reconnect-check` 周期自动恢复状态灯，
+无需重新提交任务。
 
 ### 灯一直是黄色或红色
 
@@ -371,6 +381,9 @@ PYTHONPYCACHEPREFIX=/tmp/codex-kick75-pycache \
 - 红色粘性状态和成功恢复。
 - 完成任务自动过期。
 - `SessionEnd` 清理。
+- USB 重连或侧灯复位后的状态色自动重放。
+- Unix socket 半开连接超时与 ping 响应。
+- 损坏或结构异常的状态文件容错。
 - Hook 数据最小化，避免传递提示词和工具正文。
 - 安装器合并 Hooks 时保留已有配置。
 - 卸载器只删除本项目 Hook。

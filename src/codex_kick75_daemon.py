@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from codex_kick75_common import APP_DIR
+from codex_kick75_common import APP_DIR, VERSION
 
 SOCKET_PATH = APP_DIR / "status.sock"
 STATE_PATH = APP_DIR / "state.json"
@@ -22,8 +22,15 @@ LEDCTL_PATH = Path(os.environ.get("CODEX_KICK75_LEDCTL", str(APP_DIR / "kick75_l
 GREEN_HOLD_SECONDS = float(os.environ.get("CODEX_KICK75_GREEN_HOLD", "10"))
 STALE_TASK_SECONDS = float(os.environ.get("CODEX_KICK75_STALE_TASK", str(12 * 60 * 60)))
 HID_RETRY_SECONDS = float(os.environ.get("CODEX_KICK75_HID_RETRY", "10"))
+HID_RECONNECT_CHECK_SECONDS = float(os.environ.get("CODEX_KICK75_RECONNECT_CHECK", "10"))
+CLIENT_READ_TIMEOUT_SECONDS = float(os.environ.get("CODEX_KICK75_CLIENT_TIMEOUT", "0.5"))
 MAX_MESSAGE_SIZE = 1024 * 1024
 MAX_LOG_SIZE = 1024 * 1024
+COLOR_SIDE_STATES = {
+    "red": "0264010000ff0000",
+    "yellow": "0264010000ffb400",
+    "green": "026401000000ff00",
+}
 
 
 class StatusAggregator:
@@ -106,6 +113,15 @@ class LedController:
         self.baseline = baseline
         self.effective = effective
         self.last_attempt = 0.0
+        self.last_health_check = 0.0
+        self.hardware_available: Optional[bool] = None
+        self.hardware_error: Optional[str] = None
+        self.hardware_checked_at: Optional[float] = None
+
+    def record_hardware_result(self, error: Optional[BaseException] = None) -> None:
+        self.hardware_available = error is None
+        self.hardware_error = None if error is None else str(error)
+        self.hardware_checked_at = time.time()
 
     def _run(self, arguments: list) -> str:
         result = subprocess.run(
@@ -118,14 +134,18 @@ class LedController:
         if result.returncode != 0:
             message = result.stderr.strip() or result.stdout.strip() or "unknown HID error"
             raise RuntimeError(message)
+        self.record_hardware_result()
         return result.stdout
 
-    def _read_baseline(self) -> str:
+    def _read_side_state(self) -> str:
         output = self._run(["--get-side"])
         match = re.search(r"^SIDE_STATE=([0-9a-fA-F]{16})$", output, re.MULTILINE)
         if not match:
             raise RuntimeError("kick75_ledctl returned no SIDE_STATE")
         return match.group(1).lower()
+
+    def _read_baseline(self) -> str:
+        return self._read_side_state()
 
     def apply(self, desired: str, force: bool = False) -> bool:
         now = time.time()
@@ -146,6 +166,24 @@ class LedController:
             self.baseline = self._read_baseline()
         self._run(["--color", desired])
         self.effective = desired
+        self.last_health_check = time.time()
+        return True
+
+    def health_check(self, force: bool = False) -> bool:
+        """Reapply an active color when the keyboard has reset its side LEDs."""
+        expected = COLOR_SIDE_STATES.get(self.effective)
+        if expected is None:
+            return False
+        now = time.time()
+        if not force and now - self.last_health_check < HID_RECONNECT_CHECK_SECONDS:
+            return False
+        self.last_health_check = now
+        actual = self._read_side_state()
+        if actual == expected:
+            self.record_hardware_result()
+            return False
+        self._run(["--color", self.effective])
+        self.record_hardware_result()
         return True
 
 
@@ -163,7 +201,25 @@ class CodexKick75Daemon:
         try:
             with STATE_PATH.open("r", encoding="utf-8") as handle:
                 value = json.load(handle)
-            return value if isinstance(value, dict) else {}
+            if not isinstance(value, dict):
+                return {}
+            tasks = value.get("tasks")
+            sanitized_tasks = {}
+            if isinstance(tasks, dict):
+                for session_id, task in tasks.items():
+                    if not isinstance(session_id, str) or not isinstance(task, dict):
+                        continue
+                    status = task.get("status")
+                    updated_at = task.get("updated_at")
+                    if status not in ("running", "error", "completed"):
+                        continue
+                    if not isinstance(updated_at, (int, float)):
+                        continue
+                    sanitized_tasks[session_id] = task
+            baseline = value.get("baseline")
+            if not isinstance(baseline, str) or not re.fullmatch(r"[0-9a-fA-F]{16}", baseline):
+                baseline = None
+            return {"tasks": sanitized_tasks, "baseline": baseline}
         except (OSError, json.JSONDecodeError):
             return {}
 
@@ -185,6 +241,11 @@ class CodexKick75Daemon:
             "tasks": self.aggregator.tasks,
             "effective": self.controller.effective,
             "baseline": self.controller.baseline,
+            "hardware": {
+                "available": self.controller.hardware_available,
+                "error": self.controller.hardware_error,
+                "checked_at": self.controller.hardware_checked_at,
+            },
             "updated_at": time.time(),
         }
         temporary = STATE_PATH.with_suffix(".tmp")
@@ -203,20 +264,52 @@ class CodexKick75Daemon:
             if changed:
                 self._log("effective={}; tasks={}".format(desired, len(self.aggregator.tasks)))
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            self.controller.record_hardware_result(error)
             self._log("HID update failed for {}: {}".format(desired, error))
         self._save_state()
+
+    def _check_hardware(self) -> None:
+        if self.aggregator.effective() != self.controller.effective:
+            return
+        try:
+            if self.controller.health_check():
+                self._log("reapplied {} after side-light reset".format(self.controller.effective))
+                self._save_state()
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            was_available = self.controller.hardware_available
+            self.controller.record_hardware_result(error)
+            if was_available is not False:
+                self._log("HID health check failed: {}".format(error))
+            self._save_state()
+
+    def _snapshot(self) -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "version": VERSION,
+            "light": self.controller.effective,
+            "desired_light": self.aggregator.effective(),
+            "tasks": len(self.aggregator.tasks),
+            "hardware": {
+                "available": self.controller.hardware_available,
+                "error": self.controller.hardware_error,
+                "checked_at": self.controller.hardware_checked_at,
+            },
+        }
 
     def _receive(self, connection: socket.socket) -> Optional[Dict[str, Any]]:
         chunks = []
         length = 0
-        while length < MAX_MESSAGE_SIZE:
-            chunk = connection.recv(min(65536, MAX_MESSAGE_SIZE - length))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            length += len(chunk)
-            if b"\n" in chunk:
-                break
+        try:
+            while length < MAX_MESSAGE_SIZE:
+                chunk = connection.recv(min(65536, MAX_MESSAGE_SIZE - length))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                length += len(chunk)
+                if b"\n" in chunk:
+                    break
+        except socket.timeout:
+            return None
         if not chunks:
             return None
         try:
@@ -224,6 +317,15 @@ class CodexKick75Daemon:
             return value if isinstance(value, dict) else None
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
+
+    @staticmethod
+    def _respond(connection: socket.socket, response: Dict[str, Any]) -> bool:
+        payload = json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        try:
+            connection.sendall(payload + b"\n")
+            return True
+        except OSError:
+            return False
 
     def run(self) -> int:
         APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -253,16 +355,27 @@ class CodexKick75Daemon:
                     before = self.aggregator.effective()
                     self.aggregator.expire()
                     self._sync_lights(force=before != self.aggregator.effective())
+                    self._check_hardware()
                     continue
+                connection.settimeout(CLIENT_READ_TIMEOUT_SECONDS)
                 with connection:
                     event = self._receive(connection)
-                if event:
-                    if event.get("command") == "reset":
-                        self.aggregator.tasks.clear()
-                    else:
-                        self.aggregator.handle(event)
-                    self.aggregator.expire()
-                    self._sync_lights(force=True)
+                    if event:
+                        command = event.get("command")
+                        if command == "ping":
+                            self._respond(connection, self._snapshot())
+                            continue
+                        if command == "reset":
+                            self.aggregator.tasks.clear()
+                            self.aggregator.expire()
+                            self._sync_lights(force=True)
+                            self._respond(connection, {"ok": True})
+                            continue
+                        elif command is None:
+                            self.aggregator.handle(event)
+                        self.aggregator.expire()
+                        self._sync_lights(force=True)
+                        self._check_hardware()
         finally:
             try:
                 self.aggregator.tasks.clear()

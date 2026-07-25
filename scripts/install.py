@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +25,7 @@ LABEL = "com.zzm.codex-kick75"
 PLIST_PATH = LAUNCH_AGENTS / "{}.plist".format(LABEL)
 HOOKS_PATH = HOME / ".codex" / "hooks.json"
 HOOK_SCRIPT = APP_DIR / "codex_kick75_hook.py"
+SOCKET_PATH = APP_DIR / "status.sock"
 HOOK_EVENTS = (
     "UserPromptSubmit",
     "PermissionRequest",
@@ -143,7 +144,11 @@ def stop_service() -> None:
     )
 
 
-def install_launch_agent(green_hold: float, stale_task_hours: float) -> None:
+def install_launch_agent(
+    green_hold: float,
+    stale_task_hours: float,
+    reconnect_check: float,
+) -> None:
     plist = {
         "Label": LABEL,
         "ProgramArguments": ["/usr/bin/python3", str(APP_DIR / "codex_kick75_daemon.py")],
@@ -156,6 +161,7 @@ def install_launch_agent(green_hold: float, stale_task_hours: float) -> None:
             "PYTHONUNBUFFERED": "1",
             "CODEX_KICK75_GREEN_HOLD": str(green_hold),
             "CODEX_KICK75_STALE_TASK": str(stale_task_hours * 60 * 60),
+            "CODEX_KICK75_RECONNECT_CHECK": str(reconnect_check),
         },
     }
     LAUNCH_AGENTS.mkdir(parents=True, exist_ok=True)
@@ -189,7 +195,7 @@ def install_launch_agent(green_hold: float, stale_task_hours: float) -> None:
     )
 
 
-def install(green_hold: float, stale_task_hours: float) -> None:
+def install(green_hold: float, stale_task_hours: float, reconnect_check: float) -> None:
     ledctl = build_ledctl()
     APP_DIR.mkdir(parents=True, exist_ok=True)
     APP_DIR.chmod(0o700)
@@ -203,7 +209,7 @@ def install(green_hold: float, stale_task_hours: float) -> None:
         shutil.copy2(str(source), str(destination))
         destination.chmod(0o755 if source.suffix != ".py" or "hook" in name or "daemon" in name else 0o644)
 
-    install_launch_agent(green_hold, stale_task_hours)
+    install_launch_agent(green_hold, stale_task_hours, reconnect_check)
     config = load_hooks()
     if merge_hooks(config):
         save_hooks(config)
@@ -229,6 +235,47 @@ def hook_status() -> Tuple[int, int]:
     return installed, len(HOOK_EVENTS)
 
 
+def daemon_request(command: str, timeout: float = 1.0) -> Dict[str, Any]:
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(timeout)
+    try:
+        client.connect(str(SOCKET_PATH))
+        request = json.dumps({"command": command}, separators=(",", ":")).encode("utf-8")
+        client.sendall(request + b"\n")
+        chunks = []
+        length = 0
+        while length < 65536:
+            chunk = client.recv(min(4096, 65536 - length))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            length += len(chunk)
+            if b"\n" in chunk:
+                break
+    finally:
+        client.close()
+    if not chunks:
+        raise RuntimeError("daemon returned no response")
+    response = json.loads(b"".join(chunks).split(b"\n", 1)[0].decode("utf-8"))
+    if not isinstance(response, dict) or response.get("ok") is not True:
+        raise RuntimeError("daemon returned an invalid response")
+    return response
+
+
+def load_runtime_state() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    state_path = APP_DIR / "state.json"
+    if not state_path.exists():
+        return None, None
+    try:
+        with state_path.open("r", encoding="utf-8") as handle:
+            value = json.load(handle)
+        if not isinstance(value, dict):
+            return None, "state.json does not contain an object"
+        return value, None
+    except (OSError, json.JSONDecodeError) as error:
+        return None, str(error)
+
+
 def status() -> int:
     service = subprocess.run(
         ["/bin/launchctl", "print", "{}/{}".format(service_domain(), LABEL)],
@@ -236,26 +283,45 @@ def status() -> int:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    socket_ready = (APP_DIR / "status.sock").exists()
+    snapshot = None
+    ping_error = None
+    if SOCKET_PATH.exists():
+        try:
+            snapshot = daemon_request("ping")
+        except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            ping_error = str(error)
     installed, expected = hook_status()
-    if service.returncode == 0 and socket_ready:
-        service_status = "running"
+    if service.returncode == 0 and snapshot is not None:
+        service_status = "running (version {})".format(snapshot.get("version", "unknown"))
+    elif service.returncode == 0 and SOCKET_PATH.exists():
+        service_status = "registered but unresponsive"
     elif service.returncode == 0:
         service_status = "registered but socket unavailable"
     else:
         service_status = "not running"
     print("service: {}".format(service_status))
+    if ping_error:
+        print("ping:    failed ({})".format(ping_error))
     print("hooks:   {}/{} installed".format(installed, expected))
-    state_path = APP_DIR / "state.json"
-    if state_path.exists():
-        with state_path.open("r", encoding="utf-8") as handle:
-            state = json.load(handle)
-        print("light:   {}".format(state.get("effective", "unknown")))
-        print("tasks:   {}".format(len(state.get("tasks", {}))))
-        print("state:   {}".format(state_path))
+    state, state_error = load_runtime_state()
+    if snapshot is not None:
+        print("light:   {}".format(snapshot.get("light", "unknown")))
+        print("tasks:   {}".format(snapshot.get("tasks", "unknown")))
+        hardware = snapshot.get("hardware", {})
+        available = hardware.get("available") if isinstance(hardware, dict) else None
+        hardware_status = "connected" if available is True else "unavailable" if available is False else "unknown"
+        print("hardware: {}".format(hardware_status))
+    elif state is not None:
+        print("light:   {} (last saved)".format(state.get("effective", "unknown")))
+        tasks = state.get("tasks", {})
+        print("tasks:   {} (last saved)".format(len(tasks) if isinstance(tasks, dict) else "unknown"))
+    if state_error:
+        print("state:   corrupted ({})".format(state_error))
+    elif state is not None:
+        print("state:   {}".format(APP_DIR / "state.json"))
     else:
         print("state:   unavailable")
-    return 0 if service.returncode == 0 and socket_ready and installed == expected else 1
+    return 0 if service.returncode == 0 and snapshot is not None and installed == expected else 1
 
 
 def test_hid() -> int:
@@ -265,16 +331,9 @@ def test_hid() -> int:
 
 
 def reset() -> int:
-    socket_path = APP_DIR / "status.sock"
     try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(1.0)
-        try:
-            client.connect(str(socket_path))
-            client.sendall(b'{"command":"reset"}\n')
-        finally:
-            client.close()
-    except OSError as error:
+        daemon_request("reset", timeout=15.0)
+    except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError) as error:
         print("error: could not contact daemon: {}".format(error), file=sys.stderr)
         return 1
     print("Cleared tracked tasks; the original side-light effect will be restored.")
@@ -323,8 +382,18 @@ def parse_arguments() -> argparse.Namespace:
         default=12.0,
         help="hours before abandoned task state expires",
     )
+    parser.add_argument(
+        "--reconnect-check",
+        type=float,
+        default=10.0,
+        help="seconds between active side-light health checks",
+    )
     arguments = parser.parse_args()
-    if arguments.green_hold <= 0 or arguments.stale_task_hours <= 0:
+    if (
+        arguments.green_hold <= 0
+        or arguments.stale_task_hours <= 0
+        or arguments.reconnect_check <= 0
+    ):
         parser.error("timings must be positive")
     return arguments
 
@@ -335,7 +404,7 @@ def main() -> int:
         if arguments.command == "build":
             print(build_ledctl())
         elif arguments.command == "install":
-            install(arguments.green_hold, arguments.stale_task_hours)
+            install(arguments.green_hold, arguments.stale_task_hours, arguments.reconnect_check)
         elif arguments.command == "status":
             return status()
         elif arguments.command == "reset":

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 
+VERSION = "0.1.1"
 APP_DIR = Path(
     os.environ.get(
         "CODEX_KICK75_DATA_DIR",
