@@ -1,5 +1,6 @@
 # Codex Kick75 Status Lights
 
+[![CI](https://github.com/zzm20011015/codex-kick75-status-lights/actions/workflows/ci.yml/badge.svg)](https://github.com/zzm20011015/codex-kick75-status-lights/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 把 OpenAI Codex 的全局任务状态映射到 NuPhy Kick75 IO 的 5 颗侧灯。
@@ -88,8 +89,8 @@ xcode-select --install
 ### 1. 获取项目
 
 ```bash
-git clone https://github.com/<your-account>/<your-repository>.git
-cd <your-repository>
+git clone https://github.com/zzm20011015/codex-kick75-status-lights.git
+cd codex-kick75-status-lights
 ```
 
 ### 2. 先做可恢复硬件测试
@@ -434,15 +435,12 @@ PYTHONPYCACHEPREFIX=/tmp/codex-kick75-pycache \
 你可以自由使用、复制、修改、合并、发布、分发、再许可和销售本项目代码，
 但必须在副本或主要部分中保留原版权声明和 MIT 许可证文本。
 
-## 发布到 GitHub
+## 问题反馈与贡献
+
+- Bug、兼容性问题和功能建议请提交到
+  [GitHub Issues](https://github.com/zzm20011015/codex-kick75-status-lights/issues)。
+- 提交问题时，请附上 macOS 版本、键盘型号、USB VID/PID、Codex 版本和相关错误日志；
+  请先删除日志中可能包含的个人路径或任务 ID。
+- 欢迎 Fork 仓库并提交 Pull Request。提交前请运行 `make all`，确保 C 编译和全部测试通过。
 
 仓库已通过 `.gitignore` 排除 macOS `._*` 元数据、编译产物、Python 缓存和运行日志。
-
-```bash
-git init
-git add .
-git commit -m "Initial release: Codex Kick75 status lights"
-git branch -M main
-git remote add origin https://github.com/<your-account>/<your-repository>.git
-git push -u origin main
-```
