@@ -1,0 +1,60 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "dotnet: restore",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "restore",
+        "AgentKick75.slnx"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "dotnet: build",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "AgentKick75.slnx",
+        "--no-restore"
+      ],
+      "dependsOn": "dotnet: restore",
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "dotnet: test",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "AgentKick75.slnx",
+        "--no-restore"
+      ],
+      "dependsOn": "dotnet: restore",
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "dotnet: format check",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "format",
+        "AgentKick75.slnx",
+        "--no-restore",
+        "--verify-no-changes"
+      ],
+      "dependsOn": "dotnet: restore",
+      "problemMatcher": []
+    }
+  ]
+}

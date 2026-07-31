@@ -1,0 +1,8 @@
+{
+  "dotnet.defaultSolution": "AgentKick75.slnx",
+  "editor.formatOnSave": true,
+  "files.eol": "\n",
+  "[csharp]": {
+    "editor.defaultFormatter": "ms-dotnettools.csharp"
+  }
+}

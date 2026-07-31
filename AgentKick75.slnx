@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/windows/">
+    <Project Path="src/windows/AgentKick75.App/AgentKick75.App.csproj" />
+    <Project Path="src/windows/AgentKick75.Core/AgentKick75.Core.csproj" />
+    <Project Path="src/windows/AgentKick75.Hid.Windows/AgentKick75.Hid.Windows.csproj" />
+  </Folder>
+  <Folder Name="/tests/" />
+  <Folder Name="/tests/windows/">
+    <Project Path="tests/windows/AgentKick75.Core.Tests/AgentKick75.Core.Tests.csproj" />
+    <Project Path="tests/windows/AgentKick75.Integration.Tests/AgentKick75.Integration.Tests.csproj" />
+    <Project Path="tests/windows/AgentKick75.Protocol.Tests/AgentKick75.Protocol.Tests.csproj" />
+  </Folder>
+</Solution>

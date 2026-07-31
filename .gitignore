@@ -1,23 +1,19 @@
-# macOS metadata
-.DS_Store
-._*
-
-# Build output
-/build/
-/macos-app/.build/
-
-# Python caches and local environments
-__pycache__/
-*.py[cod]
-.venv/
-venv/
+# .NET build output
+**/bin/
+**/obj/
+/artifacts/
+*.user
 
 # Local runtime artifacts
 *.log
-*.sock
-state.json
 
-# Editors
+# Editors and Windows metadata
 .idea/
-.vscode/
+.vs/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
 *.swp
+Thumbs.db
+Desktop.ini

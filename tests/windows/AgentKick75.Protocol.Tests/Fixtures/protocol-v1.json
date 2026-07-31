@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "reportClassification": "source-derived",
+  "capturedDuringM0": false,
+  "source": {
+    "repository": "https://github.com/Pixelmoss/codex-kick75-status-lights",
+    "tag": "v0.2.0",
+    "commit": "e32648ee86a8a729734060ac09bd7f8a1213876f",
+    "pathsAtPinnedCommit": [
+      "src/kick75_ledctl.c",
+      "src/codex_kick75_common.py",
+      "docs/PROTOCOL.md"
+    ]
+  },
+  "notes": "The 64-byte request reports use fixed test session key 0x5A and are deterministically derived from the pinned source; they are not new M0 hardware captures. The baseline-example payload reuses an upstream documented device-read example and must never be treated as a universal restore value.",
+  "sessionKeyHex": "5A",
+  "allowedDirections": [
+    "55",
+    "AA"
+  ],
+  "allowedCommands": [
+    "EE",
+    "D5",
+    "D6"
+  ],
+  "sideStates": [
+    {
+      "name": "settings-custom",
+      "hex": "022a010000123abc"
+    },
+    {
+      "name": "baseline-example",
+      "hex": "0064010100e9fffb",
+      "origin": "upstream-documented-device-read-example",
+      "universalDefault": false
+    },
+    {
+      "name": "running-default",
+      "hex": "0264010000ffb400"
+    },
+    {
+      "name": "permission-default",
+      "hex": "0264010000ff0000"
+    },
+    {
+      "name": "failure-default",
+      "hex": "0264010000ff0000"
+    },
+    {
+      "name": "completed-default",
+      "hex": "026401000000ff00"
+    }
+  ],
+  "reports": [
+    {
+      "name": "get-light-state",
+      "directionHex": "55",
+      "commandHex": "D5",
+      "logicalLength": 17,
+      "address": 0,
+      "payloadHex": "",
+      "frameHex": "55d500594b5a5a5a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "set-side-green",
+      "directionHex": "55",
+      "commandHex": "D6",
+      "logicalLength": 8,
+      "address": 9,
+      "payloadHex": "026401000000ff00",
+      "frameHex": "55d6005752535a5a583e5b5a5a5aa55a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "restore-baseline-example",
+      "directionHex": "55",
+      "commandHex": "D6",
+      "logicalLength": 8,
+      "address": 9,
+      "payloadHex": "0064010100e9fffb",
+      "frameHex": "55d600fa52535a5a5a3e5b5b5ab3a5a1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}
