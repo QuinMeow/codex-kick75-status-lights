@@ -1,6 +1,6 @@
 # Codex Kick75 Status Lights
 
-[![CI](https://github.com/zzm20011015/codex-kick75-status-lights/actions/workflows/ci.yml/badge.svg)](https://github.com/zzm20011015/codex-kick75-status-lights/actions/workflows/ci.yml)
+[![CI](https://github.com/QuinMeow/codex-kick75-status-lights/actions/workflows/ci.yml/badge.svg)](https://github.com/QuinMeow/codex-kick75-status-lights/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 把 OpenAI Codex App 与 Codex CLI 的全局任务状态映射到 NuPhy Kick75 IO 的 5 颗侧灯。
@@ -27,6 +27,11 @@
 > [!IMPORTANT]
 > 当前只验证了 macOS + NuPhy Kick75 IO（USB VID/PID `19f5:1026`）。任意 RGB 控制依赖 USB
 > Raw HID，蓝牙连接无法使用本项目的灯光控制功能。
+
+> [!NOTE]
+> Windows 移植已完成 M0 工程与测试基线，但尚未实现或运行 HID 写入。进度、支持边界和真机闸门见
+> [Windows MVP 计划](docs/WINDOWS_CODEX_MVP_PLAN.md)与
+> [Windows 测试矩阵](docs/WINDOWS_TEST_MATRIX.md)。
 
 ## 功能概览
 
@@ -69,7 +74,7 @@ xcode-select --install
 ### 1. 下载项目
 
 ```bash
-git clone https://github.com/zzm20011015/codex-kick75-status-lights.git
+git clone https://github.com/QuinMeow/codex-kick75-status-lights.git
 cd codex-kick75-status-lights
 ```
 

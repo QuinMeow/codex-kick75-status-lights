@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
+import os
 import pathlib
 import sys
 import tempfile
@@ -66,7 +67,9 @@ class CommonTests(unittest.TestCase):
             codex_kick75_common.save_settings(codex_kick75_common.default_settings(), path)
             loaded = codex_kick75_common.load_settings(path)
             self.assertEqual(loaded, codex_kick75_common.default_settings())
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            # Windows enforces file privacy with ACLs rather than POSIX mode bits.
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(list(path.parent.glob(".settings.json-*.tmp")), [])
 
 

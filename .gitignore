@@ -5,6 +5,10 @@
 # Build output
 /build/
 /macos-app/.build/
+**/bin/
+**/obj/
+/artifacts/
+*.user
 
 # Python caches and local environments
 __pycache__/
@@ -19,5 +23,8 @@ state.json
 
 # Editors
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
 *.swp

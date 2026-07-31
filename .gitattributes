@@ -3,6 +3,12 @@
 *.h text eol=lf
 *.py text eol=lf
 *.mjs text eol=lf
+*.cs text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.json text eol=lf
+*.slnx text eol=lf
 *.md text eol=lf
 *.yml text eol=lf
+*.yaml text eol=lf
 Makefile text eol=lf

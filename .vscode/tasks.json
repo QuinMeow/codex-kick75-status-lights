@@ -1,0 +1,85 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "dotnet: restore",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "restore",
+        "AgentKick75.slnx"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "dotnet: build",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "AgentKick75.slnx",
+        "--no-restore"
+      ],
+      "dependsOn": "dotnet: restore",
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "dotnet: test",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "AgentKick75.slnx",
+        "--no-restore"
+      ],
+      "dependsOn": "dotnet: restore",
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "dotnet: format",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "format",
+        "AgentKick75.slnx"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "dotnet: run app",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/windows/AgentKick75.App/AgentKick75.App.csproj"
+      ],
+      "dependsOn": "dotnet: restore",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "dotnet: publish win-x64",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "publish",
+        "src/windows/AgentKick75.App/AgentKick75.App.csproj",
+        "-c",
+        "Release",
+        "-r",
+        "win-x64",
+        "--self-contained",
+        "true"
+      ],
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}
