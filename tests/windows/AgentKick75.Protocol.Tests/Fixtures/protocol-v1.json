@@ -6,7 +6,7 @@
     "repository": "https://github.com/Pixelmoss/codex-kick75-status-lights",
     "tag": "v0.2.0",
     "commit": "e32648ee86a8a729734060ac09bd7f8a1213876f",
-    "paths": [
+    "pathsAtPinnedCommit": [
       "src/kick75_ledctl.c",
       "src/codex_kick75_common.py",
       "docs/PROTOCOL.md"

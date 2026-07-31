@@ -6,6 +6,12 @@ The Windows work starts from release `v0.2.0`, commit
 `e32648ee86a8a729734060ac09bd7f8a1213876f`. The original Git history,
 copyright notice, and MIT `LICENSE` are retained.
 
+After the M0 behavior baseline was recorded, the legacy macOS application,
+Python daemon/hook/installer, C/IOKit controller, and their build/test helpers
+were removed from the current Windows-only tree. They remain auditable at tag
+`v0.2.0` and through the repository history; their removal does not change
+their license or attribution.
+
 [alvis-HaoH/agent-kick75-status-lights](https://github.com/alvis-HaoH/agent-kick75-status-lights)
 at commit `bf2dcb48f2c87c1794d524b9194d9aae96827cc4` is a secondary reference.
 M0 copies no implementation code from that repository. Reviewed behavioral

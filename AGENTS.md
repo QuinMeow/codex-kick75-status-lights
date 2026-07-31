@@ -10,20 +10,20 @@ Treat `docs/WINDOWS_CODEX_MVP_PLAN.md` as the authoritative scope and architectu
 - `tests/windows/`: xUnit unit, protocol, and integration tests.
 - `docs/`: implementation plans, protocol notes, and the hardware test matrix.
 
-Preserve upstream Python, C, macOS, license, and attribution files when the Pixelmoss fork is imported.
+The working tree is Windows-only. Preserve the imported Git history, `LICENSE`, attribution, and pinned source references even when legacy implementation files are removed.
 
 ## Build, Test, and Development Commands
 
-Run these from the repository root after M0 creates the solution:
+Run these from the repository root:
 
 ```powershell
 dotnet restore
 dotnet build
 dotnet test --no-restore
 dotnet format --verify-no-changes
-dotnet run --project src/windows/AgentKick75.App
-dotnet publish src/windows/AgentKick75.App -c Release -r win-x64 --self-contained true
 ```
+
+The App project is an M0 skeleton that currently exits after initialization; do not present it as a runnable product.
 
 Do not run `hardware-test --transport usb|dongle` casually. It writes keyboard lighting and requires M1 allowlists, response validation, baseline capture, and guaranteed restoration.
 

@@ -44,42 +44,17 @@
       }
     },
     {
-      "label": "dotnet: format",
+      "label": "dotnet: format check",
       "type": "process",
       "command": "dotnet",
       "args": [
         "format",
-        "AgentKick75.slnx"
-      ],
-      "problemMatcher": []
-    },
-    {
-      "label": "dotnet: run app",
-      "type": "process",
-      "command": "dotnet",
-      "args": [
-        "run",
-        "--project",
-        "src/windows/AgentKick75.App/AgentKick75.App.csproj"
+        "AgentKick75.slnx",
+        "--no-restore",
+        "--verify-no-changes"
       ],
       "dependsOn": "dotnet: restore",
-      "problemMatcher": "$msCompile"
-    },
-    {
-      "label": "dotnet: publish win-x64",
-      "type": "process",
-      "command": "dotnet",
-      "args": [
-        "publish",
-        "src/windows/AgentKick75.App/AgentKick75.App.csproj",
-        "-c",
-        "Release",
-        "-r",
-        "win-x64",
-        "--self-contained",
-        "true"
-      ],
-      "problemMatcher": "$msCompile"
+      "problemMatcher": []
     }
   ]
 }

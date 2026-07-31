@@ -164,7 +164,7 @@ docs/
   WINDOWS_TEST_MATRIX.md      # M1 后记录真实硬件组合
 ```
 
-保留上游 macOS/Python/C 文件，至少在 MVP 阶段不做大规模删除。Windows 行为稳定后，再决定是否抽取跨平台 Core 或精简旧实现。
+M0 基线验证完成后，工作树精简为 Windows/.NET 实现；上游 macOS/Python/C 运行文件不再随当前版本分发。原 `v0.2.0` 标签、完整 Git 历史、`LICENSE` 和固定来源引用继续保留，协议行为仍可按提交逐项审计。
 
 ## 6. 关键模块设计
 

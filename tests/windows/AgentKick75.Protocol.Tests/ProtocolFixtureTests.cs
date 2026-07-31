@@ -21,6 +21,17 @@ public sealed class ProtocolFixtureTests
         Assert.False(root.GetProperty("capturedDuringM0").GetBoolean());
         Assert.Equal(AdoptedCommit, source.GetProperty("commit").GetString());
         Assert.Equal("v0.2.0", source.GetProperty("tag").GetString());
+        Assert.Equal(
+            new[]
+            {
+                "src/kick75_ledctl.c",
+                "src/codex_kick75_common.py",
+                "docs/PROTOCOL.md",
+            },
+            source.GetProperty("pathsAtPinnedCommit")
+                .EnumerateArray()
+                .Select(path => path.GetString()!)
+                .ToArray());
     }
 
     [Fact]

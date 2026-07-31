@@ -3,6 +3,11 @@
 > Date: 2026-07-31
 > Status: Complete; no HID write or hardware test was performed
 
+This document records the M0 validation at commit `763b704`. A subsequent
+Windows-only cleanup removed the legacy macOS/Python implementation and its test
+runner from the current tree; they remain available at tag `v0.2.0` and in Git
+history. Current CI validates only the .NET solution.
+
 ## Repository Baseline
 
 - Fork: [QuinMeow/codex-kick75-status-lights](https://github.com/QuinMeow/codex-kick75-status-lights)
@@ -15,7 +20,7 @@ The original Git history, `LICENSE`, and copyright notice remain intact. M0
 copies no alvis implementation code; it records only provenance and reviewed
 safety constraints.
 
-## Development Baseline
+## Historical M0 Development Baseline
 
 | Component | Verified version |
 | --- | --- |
