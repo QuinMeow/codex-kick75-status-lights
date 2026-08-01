@@ -3,6 +3,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>AgentKick75</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,5 +13,11 @@
   <ItemGroup>
     <ProjectReference Include="..\AgentKick75.Core\AgentKick75.Core.csproj" />
     <ProjectReference Include="..\AgentKick75.Hid.Windows\AgentKick75.Hid.Windows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="wwwroot\index.html" LogicalName="AgentKick75.Web.index.html" />
+    <EmbeddedResource Include="wwwroot\styles.css" LogicalName="AgentKick75.Web.styles.css" />
+    <EmbeddedResource Include="wwwroot\app.js" LogicalName="AgentKick75.Web.app.js" />
   </ItemGroup>
 </Project>
