@@ -4,7 +4,8 @@
 
 M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文区分“代码路径完成”和
 “物理设备/真实 Codex 会话已验收”：USB profile 已在当前设备与回退固件组合上通过正式
-物理闸门；U1 仍为 diagnostic-only，真实 Codex lifecycle Hook 验收仍未完成。
+物理闸门；U1 仍为 diagnostic-only。真实 Codex Desktop 的 Thinking → Complete 页面与
+侧灯链路已在 2026-08-01 受监督通过。
 
 ## M1: Windows HID gate
 
@@ -25,8 +26,8 @@ M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文
   descriptor 的新连接与新 session 执行。两个恢复 ACK 和两次 D5 逐字节读回全部通过后才
   release journal。
 - 常驻 `HidLightingWorker` 的 Windows transport 使用同一完整 D6 pair，确保状态更新同时刷新
-  `10/1` brightness 镜像；该 USB 写入/恢复序列已通过受监督物理闸门，真实 Codex lifecycle
-  状态驱动仍需单独端到端验收。
+  `10/1` brightness 镜像；该 USB 写入/恢复序列与真实 Codex Thinking → Complete 状态驱动
+  均已通过受监督验收。
 - 运行时所有物理命令经过同一协调门，包含健康探测、退避重连、异常启动恢复和安全关闭。
   `HidDeviceBusyException` 会被映射为可重试的 `DeviceBusy`，第一次退避为 2 秒；该生产链已有
   mock transport 到 SSE/API 的端到端覆盖，NuPhyIO 真机占用仍需受监督验收。
@@ -52,20 +53,25 @@ M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文
   `RequiresInput > Thinking > Complete > Idle`，Stop 使用可配置 TTL，过期会清理。并行
   `request_user_input` 按 `tool_use_id` 精确关联；官方 PermissionRequest 当前没有对应 ID，因此明确
   保留每 turn 一个无关联等待 latch，不猜测 FIFO 或同名工具配对。
-- `hook codex` 是 250 ms fail-open 的同步命令；它使用随机 loopback 端口、Host 实例 token
+- 独立控制台程序 `AgentKick75.Hook.exe hook codex` 是 250 ms fail-open 的同步入口；Stop 会按上游实现向 stdout 输出空 JSON 对象，其他事件保持静默。它使用随机 loopback 端口、Host 实例 token
   和版本化 JSON。`status-response` 使用独立 allowlist DTO，Host 与 CLI 两侧都会重建并
   裁剪字符串字段；公开 identity 仅为 `VID:PID`，不包含 path、serial 或 baseline 确认 ID。
   Hook 的 20 样本分布测试分别强制在线 P95 `< 300 ms`、Host 离线 P95 `< 500 ms`。
+- 当前 Codex Desktop 任务界面未派发 Stop 时，独立 helper 同时接收官方
+  `agent-turn-complete` notify，只提取 `thread-id`/`turn-id` 并归一化为 Complete；原有 notify
+  命令按原参数继续转发。该兼容路径不读取或传输输入、assistant message 或 transcript。
 - Host 在 Pipe 边界同步归约合法 Hook，后台只使用容量 1 的无数据 reconcile 通知；通知可以合并，
   但 `Stop`、`SessionEnd` 等生命周期状态不会因队列压力丢失。Start/Stop/admission 使用原子生命周期，
   停止后先拒绝新事件，已接受事件完成最终 reconcile；状态订阅者异常彼此隔离。
 - 托盘 Host、HID worker、baseline/config store、预览/暂停/恢复、健康探测、分层退避和
   崩溃恢复均已实现。健康探测会比较当前侧灯与 desired state；发生外部漂移时只在现有 owned
-  session 内重写一次并读回，不重新捕获 baseline，也不会无限重试。Hook 配置合并/卸载逻辑有
-  自动化覆盖，但实际安装、Codex 信任确认和登录启动属于 M4，本轮没有修改用户配置。
+  session 内重写一次并读回，不重新捕获 baseline，也不会无限重试。Hook 会在首次启动
+  自动合并到用户配置，也可从控制页重新安装；安装同时保留并转发现有 Codex notify。Codex
+  Hook 仍需由用户确认信任并完全重启 Codex。
 
-真实 Codex prompt、审批或 `request_user_input`、Stop、SessionEnd 与并行 turn 仍需在
-安装/信任后的会话中做端到端灯光验收。
+真实 Codex Desktop 已确认 prompt 后进入 Thinking，回复结束后经官方完成通知进入 Complete，
+网页与键盘侧灯同步变化。审批/`request_user_input`、SessionEnd 与并行 turn 的组合仍可在后续
+日常使用中继续观察，但不再阻塞 M1–M3 收敛。
 
 ## M3: loopback control page
 
@@ -137,11 +143,9 @@ Hook 入口；Codex 沙箱通过 loopback 入口投递，不依赖其不可见�
 
 以下项目在 2026-08-01 按用户决定延期，不阻塞 M1–M3 软件实现目标收敛：
 
-1. 安装并信任项目 Hook 后，用真实 Codex 会话验证 M2 的所有生命周期事件和并行 turn。
-2. 在用户明确同意并监督时，让 NuPhyIO 占用 USB 接口，验证真实 `DeviceBusy`、2 秒退避、释放后
+1. 在用户明确同意并监督时，让 NuPhyIO 占用 USB 接口，验证真实 `DeviceBusy`、2 秒退避、释放后
    收敛，以及最终 baseline 恢复；mock 生产链通过不能替代该物理证据。
-3. M4 再完成安装/卸载、HKCU 登录启动、发布包和完整 Windows 异常/冲突 QA。
-4. U1 只有在取得远端型号和独立协议证据后才能重新进入写入评审；当前不安排 dongle 写入闸门。
+2. M4 再完成卸载、HKCU 登录启动、发布包和完整 Windows 异常/冲突 QA。
+3. U1 只有在取得远端型号和独立协议证据后才能重新进入写入评审；当前不安排 dongle 写入闸门。
 
-USB `Verified` 仅适用于本次设备与当前回退固件组合，不涵盖 `v4.0.18` 或 U1。在第 1 项完成前
-不得声称真实 Codex 到灯光的端到端行为已验证。
+USB `Verified` 仅适用于本次设备与当前回退固件组合，不涵盖 `v4.0.18` 或 U1。

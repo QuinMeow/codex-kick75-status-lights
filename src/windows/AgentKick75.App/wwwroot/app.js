@@ -7,6 +7,7 @@
   const ledRail = document.getElementById("led-rail");
   const pauseButton = document.getElementById("pause-button");
   const saveButton = document.getElementById("save-settings");
+  const installHooksButton = document.getElementById("install-hooks-button");
   const hardwareTestButton = document.getElementById("hardware-test-button");
   const hardwareTestEnabled = document.getElementById("hardware-test-enabled");
   const sessionDiagnosticsEnabled = document.getElementById("session-diagnostics-enabled");
@@ -527,6 +528,17 @@
       showNotice(result.message || (result.succeeded ? "硬件测试已完成。" : "硬件测试未通过。"), !result.succeeded);
       scheduleStatusRefresh();
     }).finally(syncHardwareTestGate);
+  });
+
+  installHooksButton.addEventListener("click", event => {
+    runBusy(event.currentTarget, async () => {
+      const result = await api("/api/v1/hooks/install", {
+        method: "POST",
+        body: {}
+      });
+      showNotice(result.message || "Codex Hook 安装请求已完成。", !result.succeeded);
+      await refreshStatus();
+    });
   });
 
   baselineRecoveryButton.addEventListener("click", event => {

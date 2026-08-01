@@ -4,6 +4,7 @@
     <Project Path="src/windows/AgentKick75.App/AgentKick75.App.csproj" />
     <Project Path="src/windows/AgentKick75.Core/AgentKick75.Core.csproj" />
     <Project Path="src/windows/AgentKick75.Hid.Windows/AgentKick75.Hid.Windows.csproj" />
+    <Project Path="src/windows/AgentKick75.Hook/AgentKick75.Hook.csproj" />
   </Folder>
   <Folder Name="/tests/" />
   <Folder Name="/tests/windows/">

@@ -3,7 +3,7 @@
 > 版本：v0.2（双连接修订草案）
 > 日期：2026-08-01
 > 当前阶段：M1–M3 软件实现已完成收敛与自动化/浏览器验证；USB profile 已通过 M1 真机闸门，
-> U1 仍为 diagnostic-only；M2 真实 Codex lifecycle Hook 与 NuPhyIO 真机 `DeviceBusy` 验收已按用户决定延期
+> U1 仍为 diagnostic-only；M2 Thinking → Complete 真机链路已通过，NuPhyIO 真机 `DeviceBusy` 验收已按用户决定延期
 
 ## 1. 结论先行
 
@@ -128,7 +128,8 @@ RequiresInput > Thinking > Complete > Idle
 
 ```mermaid
 flowchart LR
-    C["Codex lifecycle Hooks"] --> H["AgentKick75.exe hook"]
+    C["Codex lifecycle Hooks"] --> H["AgentKick75.Hook.exe"]
+    N["agent-turn-complete notify"] --> H
     H -->|"随机 loopback 端口 + 实例 token；最小化事件"| T["Windows 托盘 Host"]
     T --> R["Codex 状态 Reducer"]
     R --> L["灯效调度器"]
@@ -162,6 +163,7 @@ src/windows/
   AgentKick75.Hid.Windows/   # SetupAPI/HID、热插拔、超时、设备能力筛选
   AgentKick75.App/           # WinExe、托盘、Host、Pipe、HTTP、命令子模式
     wwwroot/                 # index.html、app.js、styles.css，发布时嵌入
+  AgentKick75.Hook/          # 控制台 Hook helper，保证 Stop 的 stdin/stdout 契约
 tests/windows/
   AgentKick75.Core.Tests/
   AgentKick75.Protocol.Tests/
@@ -175,12 +177,12 @@ M0 基线验证完成后，工作树精简为 Windows/.NET 实现；上游 macOS
 
 ## 6. 关键模块设计
 
-### 6.1 单一可执行文件与托盘
+### 6.1 托盘主程序与 Hook helper
 
-`AgentKick75.exe` 根据参数进入不同模式：
+运行时包含托盘主程序和一个轻量控制台 helper：
 
 - 无参数：启动单实例托盘 Host；
-- `hook codex`：读取 stdin Hook JSON、投递经实例 token 认证的 loopback 入口、立即退出；
+- `AgentKick75.Hook.exe hook codex`：读取 stdin Hook JSON、投递经实例 token 认证的 loopback 入口；Stop 向 stdout 返回空 JSON 对象后退出；
 - `hardware-test --transport auto|usb|dongle`：`auto`/`dongle` 默认只做安全诊断；USB profile
   直接执行读取/绿灯/恢复测试；
 - `install`：安装用户级 Hooks 和登录启动项；
@@ -194,7 +196,7 @@ Host 使用当前用户单实例锁。首版不使用 Windows Service，避免 S
 
 ### 6.2 Codex Hook
 
-使用[官方 Hooks](https://developers.openai.com/codex/hooks)，不读取 Codex 的 SQLite、历史文件或 transcript。安装器优先合并用户级 `~/.codex/hooks.json`，并使用官方 `commandWindows` 指向打包后的 EXE。
+使用[官方 Hooks](https://developers.openai.com/codex/hooks)，不读取 Codex 的 SQLite、历史文件或 transcript。安装器合并用户级 `~/.codex/hooks.json`，并使用官方 `commandWindows` 指向打包后的 EXE。
 
 MVP 注册：
 
@@ -207,13 +209,17 @@ MVP 注册：
 | `Stop` | `Complete`，10 秒 TTL |
 | `SessionEnd` | 删除 session |
 
+若当前 Codex Desktop 界面不派发 Stop，helper 使用官方 `agent-turn-complete` notify 补充同一
+Complete 事件，并继续转发用户原有 notify 命令；只提取 thread/turn 标识，不传输消息正文。
+
 Hook helper 必须：
 
 - 仅读取允许列表字段：`hook_event_name`、`session_id`、`turn_id`、`tool_name`，以及仅用于
   Pre/PostToolUse 配对的 `tool_use_id`；
 - 不保存或传输 `prompt`、`tool_input`、`tool_response`、`last_assistant_message`、transcript 内容；
 - stdin 设置大小上限，JSON 缺字段时安全忽略；
-- stdout 保持为空，固定快速超时；Host 不在线时 fail-open、退出码仍为 0，不阻塞 Codex；
+- Stop 向 stdout 输出上游要求的空 JSON 对象，其他 Hook 保持静默；固定快速超时，Host 不在线时
+  fail-open、退出码仍为 0，不阻塞 Codex；
 - 安装后明确提示用户通过 Codex `/hooks` 检查并信任配置；
 - 对 Hooks 合并、去重、备份和卸载建立 fixture 测试。
 
@@ -371,8 +377,8 @@ USB 验收设备为 `19F5:1026`、`MI_03`、Usage Page `0001`、Usage `0000`、�
 
 ## 8. MVP 验收标准
 
-以下是完整“双连接 + 真实 Hook”发布目标，并非当前完成清单。当前只有 USB profile 在上述设备/
-回退固件组合上通过物理闸门；U1 写入、真实 Hook 和 M4 QA 仍未完成。
+以下是完整“双连接”发布目标，并非当前完成清单。当前只有 USB profile 在上述设备/回退固件
+组合上通过物理闸门；Thinking → Complete 真实 Hook 链路已通过，U1 写入和 M4 QA 仍未完成。
 
 ### 8.1 功能
 
@@ -465,10 +471,9 @@ USB 已通过当前设备/回退固件组合的真机恢复测试；在 U1 独�
 
 ## 12. 下一步
 
-M1–M3 的代码路径已经实现，USB 正式物理闸门也已完成。以下物理验收已按用户决定延期；将来恢复时，
-安装并信任 Hook，以真实 Codex 会话验证 prompt、审批/`request_user_input`、Stop、SessionEnd
-和并行 turn；并让 NuPhyIO 实际占用接口，验证 `DeviceBusy` 退避与释放后收敛。Hook 安装、
-信任确认、登录启动、发布包与其余完整 Windows 异常/冲突 QA 仍属于 M4。
+M1–M3 的代码路径、USB 正式物理闸门以及真实 Codex Desktop Thinking → Complete 链路均已完成。
+NuPhyIO 实际占用接口的 `DeviceBusy` 退避/释放收敛按用户决定延期。登录启动、发布包与其余完整
+Windows 异常/冲突 QA 仍属于 M4。
 
 U1 继续保持 diagnostic-only；在取得远端 Kick75 型号和独立协议证据前，不运行 dongle 写入测试，
 也不因 USB 已通过而提升其状态。若将来重新评审 U1，必须从独立 allowlist、响应验证、baseline

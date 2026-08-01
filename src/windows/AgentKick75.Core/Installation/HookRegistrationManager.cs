@@ -15,6 +15,7 @@ public sealed class HookRegistrationManager
     // Three seconds includes the Codex shell plus the explicit PowerShell
     // launcher cold start and is also the documented SessionEnd maximum.
     public const int HookTimeoutSeconds = 3;
+    public const int RequiredHandlerCount = 6;
 
     private const string HookCommandSuffix = " hook codex";
     private const string PowerShellInvocationPrefix =
@@ -374,6 +375,7 @@ public sealed class HookRegistrationManager
         string fileName = normalized[(normalized.LastIndexOf('/') + 1)..];
         return string.Equals(fileName, "AgentKick75.exe", StringComparison.OrdinalIgnoreCase)
             || string.Equals(fileName, "AgentKick75.App.exe", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "AgentKick75.Hook.exe", StringComparison.OrdinalIgnoreCase)
             || string.Equals(fileName, "AgentKick75", StringComparison.OrdinalIgnoreCase);
     }
 

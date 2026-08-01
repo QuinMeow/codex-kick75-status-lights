@@ -173,6 +173,27 @@ public sealed class TaskStateReducerTests
     }
 
     [Fact]
+    public void Apply_StopWithDifferentTurnId_CompletesSessionWithoutStaleThinking()
+    {
+        var reducer = new TaskStateReducer(new ManualTimeProvider());
+        reducer.Apply(Event(CodexHookEventKind.UserPromptSubmit, "session", "prompt-turn"));
+        reducer.Apply(Event(
+            CodexHookEventKind.PostToolUse,
+            "session",
+            "tool-turn",
+            "shell_command"));
+
+        TaskStateSnapshot snapshot = reducer.Apply(Event(
+            CodexHookEventKind.Stop,
+            "session",
+            "stop-turn"));
+
+        TaskStateEntry completed = Assert.Single(snapshot.Turns);
+        Assert.Equal(TaskVisualState.Complete, snapshot.AggregateState);
+        Assert.Equal("stop-turn", completed.Key.TurnId);
+    }
+
+    [Fact]
     public void Apply_SessionEnd_RemovesAllTurnsOnlyForThatSession()
     {
         var reducer = new TaskStateReducer(new ManualTimeProvider());

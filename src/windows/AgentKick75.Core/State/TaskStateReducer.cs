@@ -95,6 +95,11 @@ public sealed class TaskStateReducer
                     ApplyPostToolUse(key, hookEvent.ToolUseId, now);
                     break;
                 case CodexHookEventKind.Stop:
+                    // Codex lifecycle hooks can report different turn_id values
+                    // within one top-level response. Stop ends that response, so
+                    // clear any earlier Thinking/RequiresInput entry for the same
+                    // session before holding Complete.
+                    RemoveSession(hookEvent.SessionId);
                     ReplaceState(key, TaskVisualState.Complete, now);
                     break;
                 case CodexHookEventKind.SessionEnd:

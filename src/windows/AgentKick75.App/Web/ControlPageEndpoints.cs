@@ -139,6 +139,9 @@ internal static class ControlPageEndpoints
             return Results.Ok(new { restored = true });
         });
 
+        api.MapPost("/hooks/install", async (CancellationToken cancellationToken) =>
+            Results.Ok(await controlPlane.InstallCodexHooksAsync(cancellationToken)));
+
         api.MapPost("/hardware-test", async (
             HardwareTestRequestDto request,
             CancellationToken cancellationToken) =>

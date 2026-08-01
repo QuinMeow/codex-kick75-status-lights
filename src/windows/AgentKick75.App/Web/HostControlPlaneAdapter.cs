@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using AgentKick75.App.Commands;
 using AgentKick75.App.Hosting;
 using AgentKick75.App.Lighting;
+using AgentKick75.Core.Installation;
 using AgentKick75.Core.Lighting;
 using AgentKick75.Core.State;
 
@@ -20,15 +21,32 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
     private const string HighDiagnosticTransportProfile = "kick75-high-diagnostic";
 
     private readonly HostCoordinator coordinator;
+    private readonly HookRegistrationManager? hookRegistrationManager;
+    private readonly CodexNotificationRegistrationManager? notificationRegistrationManager;
+    private readonly string? executablePath;
     private readonly object subscribersGate = new();
     private readonly Dictionary<long, Channel<ControlEventDto>> subscribers = [];
     private long nextSubscriberId;
     private long sequence;
     private bool disposed;
 
-    public HostControlPlaneAdapter(HostCoordinator coordinator)
+    public HostControlPlaneAdapter(
+        HostCoordinator coordinator,
+        HookRegistrationManager? hookRegistrationManager = null,
+        CodexNotificationRegistrationManager? notificationRegistrationManager = null,
+        string? executablePath = null)
     {
         this.coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
+        if ((hookRegistrationManager is null) != (executablePath is null)
+            || (notificationRegistrationManager is null) != (executablePath is null))
+        {
+            throw new ArgumentException(
+                "Hook registration manager and executable path must be supplied together.");
+        }
+
+        this.hookRegistrationManager = hookRegistrationManager;
+        this.notificationRegistrationManager = notificationRegistrationManager;
+        this.executablePath = executablePath;
         coordinator.StatusChanged += CoordinatorStatusChanged;
     }
 
@@ -111,6 +129,65 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
             result.Succeeded ? "passed" : "refused",
             result.Outcome,
             result.Transport);
+    }
+
+    public async ValueTask<HookInstallationResultDto> InstallCodexHooksAsync(
+        CancellationToken cancellationToken)
+    {
+        if (hookRegistrationManager is null
+            || notificationRegistrationManager is null
+            || executablePath is null)
+        {
+            return new HookInstallationResultDto(
+                false,
+                false,
+                0,
+                "unavailable",
+                "当前主程序不支持安装 Codex Hook。");
+        }
+
+        try
+        {
+            HookRegistrationResult result = await hookRegistrationManager
+                .InstallAsync(executablePath, cancellationToken)
+                .ConfigureAwait(false);
+            CodexNotificationRegistrationResult notification = await notificationRegistrationManager
+                .InstallAsync(executablePath, cancellationToken)
+                .ConfigureAwait(false);
+            bool succeeded = result.RegisteredHandlerCount ==
+                HookRegistrationManager.RequiredHandlerCount
+                && notification.Registered;
+            if (succeeded &&
+                coordinator.GetStatus().HookEnablement != HookEnablementState.Enabled)
+            {
+                coordinator.SetHookEnablement(HookEnablementState.Unconfirmed);
+            }
+
+            return new HookInstallationResultDto(
+                succeeded,
+                result.Changed || notification.Changed,
+                result.RegisteredHandlerCount,
+                succeeded ? "installed" : "incomplete",
+                succeeded
+                    ? result.Changed || notification.Changed
+                        ? "Codex Hook 与完成通知已安装。请完全重启 Codex。"
+                        : "Codex Hook 与完成通知已安装，无需修改。"
+                    : "Codex 集成安装不完整，请重试。");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            coordinator.SetHookEnablement(HookEnablementState.Disabled);
+            return new HookInstallationResultDto(
+                false,
+                false,
+                0,
+                "failed",
+                "Codex Hook 安装失败，请确认当前用户配置可写后重试。");
+        }
     }
 
     public async ValueTask<BaselineRecoveryDispositionDto> AbandonMismatchedBaselineAsync(

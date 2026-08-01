@@ -130,8 +130,8 @@ bytes 9..16  侧灯状态（8 字节）
 这些 `byte3=0,byte4=0` 向量与旧上游可见记录及当前 NuPhyIO 侧灯自定义色 serializer 一致。
 受监督绿色候选固定为 `02 64 01 00 00 00 ff 00`：静态、亮度 100、速度 1、自定义 RGB、
 color index 0、绿色。它同时符合固定旧上游的可见向量与当前 NuPhyIO 侧灯 serializer；该候选
-已在上述 USB 设备/回退固件组合上产生肉眼可见的绿色并恢复原色，但不单独证明真实 Codex Hook
-驱动的常驻 runtime 已完成端到端验收。
+已在上述 USB 设备/回退固件组合上产生肉眼可见的绿色并恢复原色；真实 Codex Desktop 的
+Thinking → Complete 常驻 runtime 链路也已另行受监督通过。
 
 亮度字节接受 `0` 到 `100`，最后三个字节接受任意 RGB 分量。Windows 实现必须从经过验证的配置
 动态生成这 8 字节，不能把示例颜色当作固定写入值。
@@ -158,8 +158,8 @@ ownership、人工观察与恢复事务只适用于用户显式启动的 guarded
 持久化并恢复它，不能把它夹带进侧灯测试。
 
 常驻 `HidLightingWorker` 通过 Windows transport 复用同一完整 pair，因此每次状态写入也会刷新
-`10/1` brightness 镜像；该 USB pair 的物理写入与恢复已经受监督验证，常驻 worker 的真实 Codex
-lifecycle 状态驱动仍需单独验收。
+`10/1` brightness 镜像；该 USB pair 的物理写入、恢复以及真实 Codex Thinking → Complete
+状态驱动均已经受监督验证。
 
 这种方式可以恢复用户原本的模式、颜色、亮度和速度，而不假设其具体含义。未来本地页面的预览也只能
 请求托盘 Host 执行；页面不得直接访问 HID。预览结束后必须恢复原 baseline 或重新应用当前任务状态。

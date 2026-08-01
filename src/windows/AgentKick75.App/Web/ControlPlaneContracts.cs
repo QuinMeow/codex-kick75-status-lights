@@ -37,6 +37,15 @@ public interface IControlPlane
         HardwareTestRequestDto request,
         CancellationToken cancellationToken);
 
+    ValueTask<HookInstallationResultDto> InstallCodexHooksAsync(
+        CancellationToken cancellationToken) =>
+        ValueTask.FromResult(new HookInstallationResultDto(
+            false,
+            false,
+            0,
+            "unavailable",
+            "当前主程序不支持安装 Codex Hook。"));
+
     ValueTask<BaselineRecoveryDispositionDto> AbandonMismatchedBaselineAsync(
         BaselineRecoveryDispositionRequestDto request,
         CancellationToken cancellationToken) =>
@@ -94,6 +103,13 @@ public sealed record HardwareTestResultDto(
     string Status,
     string Message,
     string? Transport);
+
+public sealed record HookInstallationResultDto(
+    bool Succeeded,
+    bool Changed,
+    int RegisteredHandlerCount,
+    string Status,
+    string Message);
 
 public sealed record BaselineRecoveryRiskDto(
     string Code,

@@ -108,6 +108,9 @@ public sealed class ControlPageApiTests
         Assert.Contains("AgentKick75", html, StringComparison.Ordinal);
         Assert.Contains("五段侧灯预览", html, StringComparison.Ordinal);
         Assert.Contains("id=\"hardware-test-button\" type=\"button\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"install-hooks-button\" type=\"button\"", html, StringComparison.Ordinal);
+        Assert.Contains("首次启动会自动安装", html, StringComparison.Ordinal);
+        Assert.Contains("/api/v1/hooks/install", javaScript, StringComparison.Ordinal);
         Assert.Contains("id=\"hardware-test-enabled\" type=\"checkbox\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"hardware-test-button\" type=\"button\" disabled", html, StringComparison.Ordinal);
         Assert.Contains("id=\"session-diagnostics-enabled\" type=\"checkbox\"", html, StringComparison.Ordinal);
@@ -366,6 +369,32 @@ public sealed class ControlPageApiTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(1, controlPlane.HardwareTestCallCount);
         Assert.Equal("usb", controlPlane.LastHardwareTestRequest?.Transport);
+    }
+
+    [Fact]
+    public async Task PostHookInstall_InvokesControlPlane()
+    {
+        var controlPlane = new FakeControlPlane();
+        ControlPageOptions options = CreateOptions();
+        await using AgentKick75ControlServer server = await AgentKick75ControlServer.StartAsync(
+            controlPlane,
+            options);
+        using HttpClient client = CreateClient(server);
+
+        using HttpRequestMessage request = CreateWriteRequest(
+            server,
+            HttpMethod.Post,
+            "/api/v1/hooks/install",
+            new { },
+            options.WriteToken);
+        using HttpResponseMessage response = await client.SendAsync(request);
+        HookInstallationResultDto? result = await response.Content
+            .ReadFromJsonAsync<HookInstallationResultDto>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, controlPlane.HookInstallCallCount);
+        Assert.True(result?.Succeeded);
+        Assert.Equal(6, result?.RegisteredHandlerCount);
     }
 
     [Fact]
@@ -776,6 +805,8 @@ public sealed class ControlPageApiTests
 
         public int HardwareTestCallCount { get; private set; }
 
+        public int HookInstallCallCount { get; private set; }
+
         public int BaselineRecoveryCallCount { get; private set; }
 
         public int RestoreCallCount { get; private set; }
@@ -847,6 +878,19 @@ public sealed class ControlPageApiTests
                 Status: "passed",
                 Message: "Baseline restored.",
                 Transport: request.Transport));
+        }
+
+        public ValueTask<HookInstallationResultDto> InstallCodexHooksAsync(
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            HookInstallCallCount++;
+            return ValueTask.FromResult(new HookInstallationResultDto(
+                true,
+                false,
+                6,
+                "installed",
+                "Codex Hook 已安装，无需修改。"));
         }
 
         public ValueTask<BaselineRecoveryDispositionDto> AbandonMismatchedBaselineAsync(

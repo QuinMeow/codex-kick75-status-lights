@@ -7,7 +7,6 @@ namespace AgentKick75.App.Commands;
 public enum AppCommandKind
 {
     Host,
-    HookCodex,
     Status,
     HardwareTest,
     Help,
@@ -76,11 +75,6 @@ public static class CommandLine
             return new(AppCommandKind.Help);
         }
 
-        if (arguments.Count == 2 && arguments[0] is "hook" && arguments[1] is "codex")
-        {
-            return new(AppCommandKind.HookCodex);
-        }
-
         if (arguments[0] is "hardware-test")
         {
             return ParseHardwareTest(arguments);
@@ -90,7 +84,7 @@ public static class CommandLine
     }
 
     public static string Usage =>
-        $"AgentKick75 [status | hook codex | hardware-test --transport auto|usb|dongle " +
+        $"AgentKick75 [status | hardware-test --transport auto|usb|dongle " +
         $"[--cycles 1..100] [--green-seconds 0..60]]{Environment.NewLine}" +
         "The command reads the current side-light state, previews green, and restores it. " +
         "USB is currently the only writable profile; dongle remains diagnostic-only and write-blocked.";

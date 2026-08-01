@@ -10,6 +10,7 @@ using AgentKick75.App.Tray;
 using AgentKick75.App.Web;
 using AgentKick75.Core.Baseline;
 using AgentKick75.Core.Configuration;
+using AgentKick75.Core.Installation;
 using AgentKick75.Core.State;
 using AgentKick75.Core.Storage;
 
@@ -21,17 +22,6 @@ internal static class Program
     private static int Main(string[] args)
     {
         ParsedCommand command = CommandLine.Parse(args);
-        if (command.Kind == AppCommandKind.HookCodex)
-        {
-            // Do not add logging or console output around this call. Codex command
-            // hooks are deliberately silent and fail-open.
-            return HookCommand.ExecuteAsync(
-                    Console.In,
-                    new LoopbackHookRequestClient())
-                .GetAwaiter()
-                .GetResult();
-        }
-
         return command.Kind switch
         {
             AppCommandKind.Host => RunHost(),
@@ -57,6 +47,17 @@ internal static class Program
         {
             ApplicationConfiguration.Initialize();
             string dataDirectory = EnsureUserDataDirectory();
+            string hookExecutablePath = Path.Combine(
+                AppContext.BaseDirectory,
+                "AgentKick75.Hook.exe");
+            var hookRegistrationManager = new HookRegistrationManager(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".codex",
+                "hooks.json"));
+            var notificationRegistrationManager = new CodexNotificationRegistrationManager(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".codex",
+                "config.toml"));
             var configurationStore = new ConfigurationStore(Path.Combine(dataDirectory, "config.json"));
             ConfigurationLoadResult configurationLoad = configurationStore.LoadAsync()
                 .GetAwaiter()
@@ -78,11 +79,20 @@ internal static class Program
                 new CoreHostSettingsPersistence(configurationStore, configuration),
                 configuration.StartAtLogin,
                 diagnosticLog);
+            TryInstallCodexIntegration(
+                hookRegistrationManager,
+                notificationRegistrationManager,
+                hookExecutablePath,
+                coordinator);
             var runtime = new HostRuntime(
                 worker,
                 coordinator,
                 diagnosticLog: diagnosticLog);
-            using var controlPlane = new HostControlPlaneAdapter(coordinator);
+            using var controlPlane = new HostControlPlaneAdapter(
+                coordinator,
+                hookRegistrationManager,
+                notificationRegistrationManager,
+                hookExecutablePath);
             AgentKick75ControlServer? controlServer = null;
 
             try
@@ -123,6 +133,34 @@ internal static class Program
                     runtime.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 }
             }
+        }
+    }
+
+    private static void TryInstallCodexIntegration(
+        HookRegistrationManager hookRegistrationManager,
+        CodexNotificationRegistrationManager notificationRegistrationManager,
+        string hookExecutablePath,
+        HostCoordinator coordinator)
+    {
+        try
+        {
+            HookRegistrationResult result = hookRegistrationManager
+                .InstallAsync(hookExecutablePath)
+                .GetAwaiter()
+                .GetResult();
+            CodexNotificationRegistrationResult notification = notificationRegistrationManager
+                .InstallAsync(hookExecutablePath)
+                .GetAwaiter()
+                .GetResult();
+            if (result.RegisteredHandlerCount != HookRegistrationManager.RequiredHandlerCount
+                || !notification.Registered)
+            {
+                coordinator.SetHookEnablement(HookEnablementState.Disabled);
+            }
+        }
+        catch (Exception)
+        {
+            coordinator.SetHookEnablement(HookEnablementState.Disabled);
         }
     }
 

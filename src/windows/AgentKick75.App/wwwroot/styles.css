@@ -679,6 +679,27 @@ select {
   font-size: 11px;
 }
 
+.hook-install {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface-alt);
+}
+
+.hook-install div {
+  display: grid;
+  gap: 3px;
+}
+
+.hook-install small {
+  color: var(--muted);
+}
+
 .baseline-recovery {
   display: grid;
   gap: 10px;

@@ -11,7 +11,8 @@ loopback 本地页面提供设置。
 > M1–M3 的主体实现和自动化测试已经完成，USB profile 已在一台 Kick75 与当前回退固件组合上
 > 通过正式真机闸门。回退固件的精确版本未记录，修正后的协议尚未在 `v4.0.18` 上复测，因此
 > 此结论不能外推到所有固件。U1 当前仍为 diagnostic-only，禁止写入；项目也尚无 M4 安装包，
-> 真实 Codex lifecycle Hook 与 NuPhyIO `DeviceBusy` 物理验收已按用户决定延期。
+> 真实 Codex Desktop 的 Thinking → Complete 灯光链路已受监督通过；NuPhyIO `DeviceBusy`
+> 物理验收已按用户决定延期。
 > 不要把开发构建当作已验证的日常使用产品。
 
 ## 当前进度
@@ -20,7 +21,7 @@ loopback 本地页面提供设置。
 | --- | --- | --- |
 | M0 | 已完成 | .NET 10 solution、Windows 项目边界、CI、固定来源的协议 fixtures |
 | M1 | USB profile 已通过；U1 只诊断 | HID 枚举/筛选、协议 codec、活动 `currentMode`、基线 journal、USB 守护式读取/绿色试灯/读回恢复 |
-| M2 | 实现完成；真实 Hook 验收待执行 | Codex 事件裁剪、状态聚合、托盘 Host、带实例 token 的 loopback Hook 入口、HID worker 与重连 |
+| M2 | 已完成；Thinking/Complete 真机链路已通过 | Codex 事件裁剪、状态聚合、托盘 Host、独立 Hook helper、完成通知兼容、HID worker 与重连 |
 | M3 | 已完成 | 受限 loopback 控制页、设置/预览/暂停/恢复、SSE、桌面与移动端浏览器 QA |
 | M4 | 未开始 | 安装、卸载、发布与 Windows QA |
 
@@ -40,7 +41,7 @@ USB 的结果。
 
 多会话目标优先级为
 `RequiresInput > Thinking > Complete > Idle`。该语义已在 reducer 和 mock 集成测试中实现；
-真实 Codex lifecycle Hooks 的端到端灯光验收已延期，不计入本次软件实现完成结论。
+真实 Codex Desktop 的 Thinking → Complete 页面与侧灯变化已于 2026-08-01 受监督确认。
 
 ## 硬件支持状态
 
@@ -61,7 +62,8 @@ USB 的结果。
 
 ~~~mermaid
 flowchart LR
-    C["Codex lifecycle Hooks"] --> H["AgentKick75.exe hook"]
+    C["Codex lifecycle Hooks"] --> H["AgentKick75.Hook.exe"]
+    N["agent-turn-complete notify"] --> H
     H --> P["随机 loopback 端口 + Host 实例 token"]
     P --> T["Windows 托盘 Host"]
     T --> S["状态聚合与灯效调度"]
@@ -119,7 +121,8 @@ USB 正式 M1 验收已经在现场监督下通过。需要复验时，直接使
 ├── src/windows/
 │   ├── AgentKick75.Core/          # 状态、协议、配置的跨平台核心
 │   ├── AgentKick75.Hid.Windows/   # Windows HID/SetupAPI 边界
-│   └── AgentKick75.App/           # 托盘 Host、Hook 与本地页面入口
+│   ├── AgentKick75.App/           # 托盘 Host 与本地页面入口（WinExe）
+│   └── AgentKick75.Hook/          # Codex 控制台 Hook helper（stdin/stdout）
 ├── tests/windows/
 │   ├── AgentKick75.Core.Tests/
 │   ├── AgentKick75.Protocol.Tests/

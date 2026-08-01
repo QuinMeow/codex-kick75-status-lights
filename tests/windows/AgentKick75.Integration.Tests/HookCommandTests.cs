@@ -91,6 +91,24 @@ public sealed class HookCommandTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_Stop_WritesUpstreamCompatibleEmptyJson()
+    {
+        const string input = """
+            {"hook_event_name":"Stop","session_id":"s","turn_id":"t"}
+            """;
+        var output = new StringWriter();
+        var client = new CapturingPipeClient();
+
+        int exitCode = await HookCommand.ExecuteAsync(
+            new StringReader(input),
+            output,
+            client);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("{}" + Environment.NewLine, output.ToString());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_MissingRealPipe_FailsOpenWithinOfflineBudget()
     {
         const string input = """
