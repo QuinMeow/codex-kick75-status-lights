@@ -6,4 +6,8 @@
   <ItemGroup>
     <ProjectReference Include="..\AgentKick75.Core\AgentKick75.Core.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AgentKick75.Integration.Tests" />
+  </ItemGroup>
 </Project>
