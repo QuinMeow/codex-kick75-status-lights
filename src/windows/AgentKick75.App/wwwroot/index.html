@@ -1,53 +1,53 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="agentkick75-write-token" content="__AGENT_KICK75_WRITE_TOKEN__">
-  <title>Agent Kick75 · Local control</title>
+  <title>Agent Kick75 · 本地控制</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Agent Kick75 home">
+    <a class="brand" href="/" aria-label="Agent Kick75 首页">
       <span class="brand-mark" aria-hidden="true">A</span>
       <span>AgentKick75</span>
     </a>
     <span class="topbar-divider" aria-hidden="true"></span>
-    <span class="topbar-context">Codex status light</span>
+    <span class="topbar-context">Codex 状态灯</span>
     <span class="connection-label" id="connection-label">
       <span class="connection-dot" aria-hidden="true"></span>
-      <span id="connection-text">Connecting</span>
+      <span id="connection-text">正在连接</span>
     </span>
   </header>
 
   <main class="page-shell">
     <section class="panel status-overview" aria-labelledby="current-state-heading">
       <div class="state-area">
-        <h1 class="sr-only" id="current-state-heading">Current aggregate state</h1>
+        <h1 class="sr-only" id="current-state-heading">当前汇总状态</h1>
         <div class="state-display state-idle" id="state-banner">
           <span class="state-orb" aria-hidden="true"></span>
-          <strong id="aggregate-state">Idle</strong>
+          <strong id="aggregate-state">空闲</strong>
         </div>
         <dl class="status-metadata">
           <div>
-            <dt>Sessions</dt>
-            <dd><strong id="active-sessions">0</strong> active</dd>
+            <dt>会话</dt>
+            <dd><strong id="active-sessions">0</strong> 个活动会话</dd>
           </div>
           <div>
             <dt>Hook</dt>
-            <dd id="hook-status">Unknown</dd>
+            <dd id="hook-status">未知</dd>
           </div>
           <div>
-            <dt>Last event</dt>
+            <dt>最近事件</dt>
             <dd id="last-event">—</dd>
           </div>
         </dl>
-        <p class="host-mode" id="host-mode">Lighting control is active</p>
+        <p class="host-mode" id="host-mode">灯光接管已启用</p>
       </div>
-      <div class="led-rail state-idle" id="led-rail" aria-label="Five-segment side-light preview">
+      <div class="led-rail state-idle" id="led-rail" aria-label="五段侧灯预览">
         <span></span><span></span><span></span><span></span><span></span>
       </div>
     </section>
@@ -56,48 +56,48 @@
       <section class="panel settings-panel" aria-labelledby="settings-heading">
         <div class="panel-heading">
           <div>
-            <h2 id="settings-heading">Lighting settings</h2>
-            <p>Lighting changes take effect immediately; startup is a saved preference only.</p>
+            <h2 id="settings-heading">灯光设置</h2>
+            <p>灯光修改立即生效；开机启动目前仅保存偏好。</p>
           </div>
-          <button class="button button-primary" id="save-settings" type="submit" form="settings-form">Save</button>
+          <button class="button button-primary" id="save-settings" type="submit" form="settings-form">保存</button>
         </div>
 
         <form id="settings-form" novalidate>
           <div class="style-list">
             <fieldset class="style-row style-thinking">
-              <legend><span class="style-dot" aria-hidden="true"></span>Thinking</legend>
+              <legend><span class="style-dot" aria-hidden="true"></span>思考中</legend>
               <div class="color-inputs">
-                <input id="thinking-color" name="thinking-color" type="color" value="#006BFF" aria-label="Thinking color picker">
-                <input id="thinking-hex" name="thinking-hex" type="text" value="#006BFF" maxlength="7" spellcheck="false" aria-label="Thinking color hex value">
+                <input id="thinking-color" name="thinking-color" type="color" value="#006BFF" aria-label="思考中颜色选择器">
+                <input id="thinking-hex" name="thinking-hex" type="text" value="#006BFF" maxlength="7" spellcheck="false" aria-label="思考中颜色十六进制值">
               </div>
               <label class="brightness-control" for="thinking-brightness">
-                <span>Brightness</span>
+                <span>亮度</span>
                 <input id="thinking-brightness" name="thinking-brightness" type="range" min="0" max="100" value="100">
                 <output id="thinking-brightness-value" for="thinking-brightness">100%</output>
               </label>
             </fieldset>
 
             <fieldset class="style-row style-requires-input">
-              <legend><span class="style-dot" aria-hidden="true"></span>Requires input</legend>
+              <legend><span class="style-dot" aria-hidden="true"></span>等待输入</legend>
               <div class="color-inputs">
-                <input id="requires-input-color" name="requires-input-color" type="color" value="#FFB400" aria-label="Requires input color picker">
-                <input id="requires-input-hex" name="requires-input-hex" type="text" value="#FFB400" maxlength="7" spellcheck="false" aria-label="Requires input color hex value">
+                <input id="requires-input-color" name="requires-input-color" type="color" value="#FFB400" aria-label="等待输入颜色选择器">
+                <input id="requires-input-hex" name="requires-input-hex" type="text" value="#FFB400" maxlength="7" spellcheck="false" aria-label="等待输入颜色十六进制值">
               </div>
               <label class="brightness-control" for="requires-input-brightness">
-                <span>Brightness</span>
+                <span>亮度</span>
                 <input id="requires-input-brightness" name="requires-input-brightness" type="range" min="0" max="100" value="100">
                 <output id="requires-input-brightness-value" for="requires-input-brightness">100%</output>
               </label>
             </fieldset>
 
             <fieldset class="style-row style-complete">
-              <legend><span class="style-dot" aria-hidden="true"></span>Complete</legend>
+              <legend><span class="style-dot" aria-hidden="true"></span>已完成</legend>
               <div class="color-inputs">
-                <input id="complete-color" name="complete-color" type="color" value="#00FF00" aria-label="Complete color picker">
-                <input id="complete-hex" name="complete-hex" type="text" value="#00FF00" maxlength="7" spellcheck="false" aria-label="Complete color hex value">
+                <input id="complete-color" name="complete-color" type="color" value="#00FF00" aria-label="已完成颜色选择器">
+                <input id="complete-hex" name="complete-hex" type="text" value="#00FF00" maxlength="7" spellcheck="false" aria-label="已完成颜色十六进制值">
               </div>
               <label class="brightness-control" for="complete-brightness">
-                <span>Brightness</span>
+                <span>亮度</span>
                 <input id="complete-brightness" name="complete-brightness" type="range" min="0" max="100" value="100">
                 <output id="complete-brightness-value" for="complete-brightness">100%</output>
               </label>
@@ -105,28 +105,28 @@
           </div>
 
           <div class="hold-row">
-            <label for="complete-hold-seconds">Complete hold</label>
+            <label for="complete-hold-seconds">完成状态保持</label>
             <input id="complete-hold-seconds" name="complete-hold-seconds" type="number" min="1" max="3600" value="10">
-            <span>seconds</span>
+            <span>秒</span>
           </div>
 
           <div class="lighting-actions">
             <div class="preview-action">
-              <label class="sr-only" for="preview-state">Preview state</label>
+              <label class="sr-only" for="preview-state">预览状态</label>
               <select id="preview-state" name="preview-state">
-                <option value="thinking">Thinking</option>
-                <option value="requires-input">Requires input</option>
-                <option value="complete">Complete</option>
+                <option value="thinking">思考中</option>
+                <option value="requires-input">等待输入</option>
+                <option value="complete">已完成</option>
               </select>
-              <button class="button button-primary" id="preview-button" type="button">Preview 3s</button>
+              <button class="button button-primary" id="preview-button" type="button">预览 3 秒</button>
             </div>
             <button class="action-button" id="pause-button" type="button">
-              <span class="action-title">Pause</span>
-              <span class="action-description">Restore lighting and stop updates</span>
+              <span class="action-title">暂停</span>
+              <span class="action-description">恢复原灯效并停止更新</span>
             </button>
             <button class="action-button" id="restore-button" type="button">
-              <span class="action-title">Restore original</span>
-              <span class="action-description">Release the current side light</span>
+              <span class="action-title">恢复原灯效</span>
+              <span class="action-description">释放当前侧灯接管</span>
             </button>
           </div>
 
@@ -135,11 +135,11 @@
               <input id="launch-at-sign-in" name="launch-at-sign-in" type="checkbox">
               <span class="toggle-track" aria-hidden="true"></span>
               <span class="launch-copy">
-                <span>Launch at sign-in</span>
-                <small>Preference only · takes effect after M4 installation</small>
+                <span>登录时启动</span>
+                <small>目前仅保存偏好 · M4 安装后生效</small>
               </span>
             </label>
-            <span class="privacy-note">No prompts, tool content, or transcripts</span>
+            <span class="privacy-note">不记录提示词、工具内容或对话</span>
           </div>
         </form>
       </section>
@@ -153,115 +153,131 @@
             </svg>
           </span>
           <div>
-            <h2 id="device-heading"><span id="device-model">Unknown device</span></h2>
+            <h2 id="device-heading"><span id="device-model">未知设备</span></h2>
             <div class="device-summary">
               <span id="device-transport">—</span>
               <span id="keyboard-status">—</span>
-              <span>Support: <strong id="support-status">Unknown</strong></span>
+              <span>支持状态：<strong id="support-status">未知</strong></span>
             </div>
           </div>
         </div>
 
         <div class="diagnostics-heading">
-          <h3>Diagnostics</h3>
-          <span class="live-state" id="live-state">Starting</span>
+          <h3>设备诊断</h3>
+          <span class="live-state" id="live-state">正在启动</span>
         </div>
         <dl class="diagnostics-list">
           <div>
-            <dt>Transport</dt>
+            <dt>传输方式</dt>
             <dd id="transport-detail">—</dd>
           </div>
           <div>
-            <dt>Receiver</dt>
+            <dt>接收器</dt>
             <dd id="receiver-status">—</dd>
           </div>
           <div>
-            <dt>Keyboard</dt>
+            <dt>键盘</dt>
             <dd id="keyboard-detail">—</dd>
           </div>
           <div>
-            <dt>HID descriptor version</dt>
+            <dt>HID 描述符版本</dt>
             <dd id="firmware-version">—</dd>
           </div>
           <div>
-            <dt>Device identity</dt>
+            <dt>设备标识</dt>
             <dd id="device-identity">—</dd>
           </div>
           <div>
-            <dt>Descriptor / interface fingerprint</dt>
-            <dd id="interface-fingerprint">Unknown</dd>
+            <dt>描述符 / 接口指纹</dt>
+            <dd id="interface-fingerprint">未知</dd>
           </div>
         </dl>
         <p class="device-error" id="device-error" hidden></p>
         <div class="diagnostics-footnote">
-          Device values come from the tray host. Enumeration alone is never reported as verified support.
+          设备状态来自托盘主程序；仅枚举到设备不会显示为已验证支持。
         </div>
         <section class="baseline-recovery" id="baseline-recovery" aria-labelledby="baseline-recovery-heading" hidden>
-          <h3 id="baseline-recovery-heading">Recovery blocked: device changed</h3>
+          <h3 id="baseline-recovery-heading">恢复已阻止：设备已变化</h3>
           <p id="baseline-recovery-message"></p>
           <dl>
-            <div><dt>Saved baseline</dt><dd id="baseline-device-identity">—</dd></div>
-            <div><dt>Observed device</dt><dd id="observed-device-identity">—</dd></div>
+            <div><dt>已保存基线</dt><dd id="baseline-device-identity">—</dd></div>
+            <div><dt>当前设备</dt><dd id="observed-device-identity">—</dd></div>
           </dl>
           <label for="baseline-recovery-confirmation">
             <input id="baseline-recovery-confirmation" type="checkbox" autocomplete="off">
-            <span>I understand the old device may retain its last side-light state and want to abandon only its saved ownership marker.</span>
+            <span>我了解旧设备可能保留最后一次侧灯状态，并仅放弃其已保存的接管标记。</span>
           </label>
-          <button class="button baseline-recovery-button" id="baseline-recovery-button" type="button" disabled>Abandon old baseline ownership</button>
-          <small>This never writes the saved bytes to the currently connected device. Lighting control remains paused until you explicitly resume it.</small>
+          <button class="button baseline-recovery-button" id="baseline-recovery-button" type="button" disabled>放弃旧基线接管</button>
+          <small>该操作不会把旧数据写入当前设备。灯光接管会保持暂停，直到你手动恢复。</small>
         </section>
         <details class="session-diagnostics">
           <summary>
-            <span>Session diagnostics</span>
-            <span class="session-diagnostics-meta"><span id="diagnostic-count">0</span> events · memory only</span>
+            <span>会话诊断</span>
+            <span class="session-diagnostics-meta"><span id="diagnostic-count">0</span> 条 · 仅内存</span>
           </summary>
-          <div class="session-diagnostics-toolbar">
-            <p>Shows only time, event kind, diagnostic code, and aggregate status. Cleared when this page closes.</p>
-            <button class="button" id="clear-session-log" type="button">Clear</button>
+          <label class="diagnostics-enable" for="session-diagnostics-enabled">
+            <input id="session-diagnostics-enabled" type="checkbox" autocomplete="off">
+            <span>启用会话诊断</span>
+          </label>
+          <div id="session-diagnostics-content" hidden>
+            <div class="session-diagnostics-toolbar">
+              <p>仅记录思考中、等待输入和已完成状态；关闭页面后自动清除。</p>
+              <button class="button" id="clear-session-log" type="button" disabled>清除</button>
+            </div>
+            <div class="event-columns" aria-hidden="true">
+              <span>时间</span><span>类型</span><span>代码</span><span>状态摘要</span>
+            </div>
+            <ol class="event-log" id="event-log" aria-live="polite" aria-relevant="additions"></ol>
           </div>
-          <div class="event-columns" aria-hidden="true">
-            <span>Time</span><span>Kind</span><span>Code</span><span>Status summary</span>
-          </div>
-          <ol class="event-log" id="event-log" aria-live="polite" aria-relevant="additions"></ol>
         </details>
         <details class="session-diagnostics persistent-diagnostics" id="persistent-diagnostics">
           <summary>
-            <span>Saved diagnostics</span>
-            <span class="session-diagnostics-meta"><span id="persisted-diagnostic-count">0</span> entries · persistent sanitized log</span>
+            <span>已保存诊断</span>
+            <span class="session-diagnostics-meta"><span id="persisted-diagnostic-count">0</span> 条 · 脱敏持久日志</span>
           </summary>
-          <div class="session-diagnostics-toolbar">
-            <p>Loaded separately from live session events. Session hashes and raw device details are never shown.</p>
-            <button class="button" id="load-recent-diagnostics" type="button">Load recent logs</button>
+          <label class="diagnostics-enable" for="saved-diagnostics-enabled">
+            <input id="saved-diagnostics-enabled" type="checkbox" autocomplete="off">
+            <span>启用已保存诊断</span>
+          </label>
+          <div id="saved-diagnostics-content" hidden>
+            <div class="session-diagnostics-toolbar">
+              <p>与实时会话事件分开加载，不显示原始设备详情。</p>
+              <button class="button" id="load-recent-diagnostics" type="button" disabled>加载最近日志</button>
+            </div>
+            <p class="persisted-diagnostics-status" id="persisted-diagnostics-status">尚未加载已保存日志。</p>
+            <div class="event-columns" aria-hidden="true">
+              <span>时间</span><span>类型</span><span>代码</span><span>诊断摘要</span>
+            </div>
+            <ol class="event-log persisted-event-log" id="persisted-event-log" aria-live="polite"></ol>
           </div>
-          <p class="persisted-diagnostics-status" id="persisted-diagnostics-status">Saved log has not been loaded.</p>
-          <div class="event-columns" aria-hidden="true">
-            <span>Time</span><span>Kind</span><span>Code</span><span>Diagnostic summary</span>
-          </div>
-          <ol class="event-log persisted-event-log" id="persisted-event-log" aria-live="polite"></ol>
         </details>
       </section>
     </div>
 
     <section class="panel hardware-panel" aria-labelledby="hardware-heading">
       <div class="hardware-copy">
-        <h2 id="hardware-heading">Hardware test</h2>
-        <p>Reads the baseline, previews green, validates the response, and restores exact original bytes.</p>
+        <h2 id="hardware-heading">硬件测试</h2>
+        <p>读取基线、预览绿色、校验响应，然后精确恢复原始灯效。</p>
       </div>
       <fieldset class="transport-options">
-        <legend>Transport</legend>
-        <label><input type="radio" name="hardware-transport" value="auto" checked> auto</label>
-        <label><input type="radio" name="hardware-transport" value="usb"> usb</label>
-        <label title="Diagnostic only; hardware writes are disabled">
+        <legend>传输方式</legend>
+        <label><input type="radio" name="hardware-transport" value="auto" checked> 自动</label>
+        <label><input type="radio" name="hardware-transport" value="usb"> USB</label>
+        <label title="仅诊断；硬件写入已禁用">
           <input type="radio" name="hardware-transport" value="dongle" disabled>
-          dongle (diagnostic only)
+          Dongle（仅诊断）
         </label>
       </fieldset>
-      <button class="button button-primary hardware-button" id="hardware-test-button" type="button">Run read → green → restore test</button>
+      <label class="hardware-enable" for="hardware-test-enabled">
+        <input id="hardware-test-enabled" type="checkbox" autocomplete="off">
+        <span>启用硬件测试</span>
+      </label>
+      <button class="button button-primary hardware-button" id="hardware-test-button" type="button" disabled>运行读取 → 绿色 → 恢复测试</button>
     </section>
 
     <footer class="footer">
-      <span>Loopback only · Controls Kick75 side light only · No firmware operations</span>
-      <span>Local mode</span>
+      <span>仅限本机 · 只控制 Kick75 侧灯 · 不执行固件操作</span>
+      <span>本地模式</span>
     </footer>
   </main>
 

@@ -365,6 +365,7 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
     {
         return lighting.LastFailure switch
         {
+            LightingTransportFailureKind.DeviceDisconnected => "Disconnected",
             LightingTransportFailureKind.KeyboardSleeping => "SleepingOrUnresponsive",
             LightingTransportFailureKind.DeviceBusy => "DeviceBusy",
             LightingTransportFailureKind.ProtocolViolation => "InvalidResponse",

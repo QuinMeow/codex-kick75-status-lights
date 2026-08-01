@@ -777,6 +777,24 @@ select {
   content: "−";
 }
 
+.diagnostics-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 2px 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.diagnostics-enable input,
+.hardware-enable input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--blue);
+}
+
 .session-diagnostics-meta {
   margin-left: auto;
   color: var(--muted);
@@ -832,12 +850,12 @@ select {
   display: block;
   padding: 10px 0;
   color: var(--muted);
-  content: "No in-memory events yet.";
+  content: "暂无会话诊断事件。";
   font-size: 10px;
 }
 
 .event-log.persisted-event-log:empty::before {
-  content: "No saved diagnostic entries loaded.";
+  content: "尚未加载已保存诊断。";
 }
 
 .persisted-diagnostics-status {
@@ -913,6 +931,17 @@ select {
   width: 18px;
   height: 18px;
   accent-color: var(--blue);
+}
+
+.hardware-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 620;
+  white-space: nowrap;
 }
 
 .hardware-button {

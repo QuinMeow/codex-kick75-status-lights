@@ -149,12 +149,12 @@ public sealed class PersistentDiagnosticsApiTests
         string script = await client.GetStringAsync("/app.js");
 
         Assert.Contains("id=\"event-log\"", html, StringComparison.Ordinal);
-        Assert.Contains("events · memory only", html, StringComparison.Ordinal);
+        Assert.Contains("条 · 仅内存", html, StringComparison.Ordinal);
         Assert.Contains("id=\"persisted-event-log\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"load-recent-diagnostics\"", html, StringComparison.Ordinal);
-        Assert.Contains("Load recent logs", html, StringComparison.Ordinal);
-        Assert.Contains("Loaded separately from live session events", html, StringComparison.Ordinal);
-        Assert.Contains("HID descriptor version", html, StringComparison.Ordinal);
+        Assert.Contains("加载最近日志", html, StringComparison.Ordinal);
+        Assert.Contains("与实时会话事件分开加载", html, StringComparison.Ordinal);
+        Assert.Contains("HID 描述符版本", html, StringComparison.Ordinal);
         Assert.DoesNotContain("<dt>Firmware</dt>", html, StringComparison.Ordinal);
         Assert.Contains("/api/v1/diagnostics?limit=50", script, StringComparison.Ordinal);
         Assert.Contains("persisted-event-log", script, StringComparison.Ordinal);

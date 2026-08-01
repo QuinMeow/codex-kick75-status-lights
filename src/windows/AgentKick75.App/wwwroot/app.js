@@ -8,6 +8,9 @@
   const pauseButton = document.getElementById("pause-button");
   const saveButton = document.getElementById("save-settings");
   const hardwareTestButton = document.getElementById("hardware-test-button");
+  const hardwareTestEnabled = document.getElementById("hardware-test-enabled");
+  const sessionDiagnosticsEnabled = document.getElementById("session-diagnostics-enabled");
+  const savedDiagnosticsEnabled = document.getElementById("saved-diagnostics-enabled");
   const baselineRecovery = document.getElementById("baseline-recovery");
   const baselineRecoveryConfirmation = document.getElementById("baseline-recovery-confirmation");
   const baselineRecoveryButton = document.getElementById("baseline-recovery-button");
@@ -17,12 +20,40 @@
   let statusRefreshTimer = null;
 
   const stateLabels = {
-    idle: "Idle",
-    thinking: "Thinking",
-    requiresinput: "Requires input",
-    "requires-input": "Requires input",
-    complete: "Complete"
+    idle: "空闲",
+    thinking: "思考中",
+    requiresinput: "等待输入",
+    "requires-input": "等待输入",
+    complete: "已完成"
   };
+
+  const valueLabels = {
+    Unknown: "未知",
+    none: "无",
+    NotApplicable: "不适用",
+    Present: "已连接",
+    Unavailable: "不可用",
+    Disconnected: "已断开",
+    Ready: "就绪",
+    DeviceBusy: "设备被占用",
+    SleepingOrUnresponsive: "休眠或无响应",
+    InvalidResponse: "响应无效",
+    DiagnosticOnly: "仅诊断",
+    Enabled: "已启用",
+    Disabled: "已禁用",
+    Unconfirmed: "未确认",
+    "USB allowlisted; runtime session observed": "USB 已允许；已建立运行会话",
+    "USB allowlisted; descriptor observed": "USB 已允许；已识别描述符"
+  };
+
+  const deviceModelLabels = {
+    "Unknown HID device": "未知 HID 设备",
+    "Kick75 USB HID device": "Kick75 USB HID 设备",
+    "Kick75 U1 receiver": "Kick75 U1 接收器",
+    "Kick75 High HID device": "Kick75 High HID 设备"
+  };
+
+  const sessionDiagnosticStates = new Set(["thinking", "requiresinput", "complete"]);
 
   function setText(id, value) {
     document.getElementById(id).textContent = value ?? "—";
@@ -33,7 +64,38 @@
   }
 
   function displayState(value) {
-    return stateLabels[canonicalState(value)] || "Idle";
+    return stateLabels[canonicalState(value)] || "空闲";
+  }
+
+  function displayValue(value) {
+    return valueLabels[value] || value || "—";
+  }
+
+  function displayDeviceModel(value) {
+    return deviceModelLabels[value] || value || "未知设备";
+  }
+
+  function deviceConnectionLabel(device) {
+    const keyboardStatus = String(device.keyboardStatus || "Unknown");
+    if (keyboardStatus === "Ready") {
+      return "已连接";
+    }
+    if (keyboardStatus === "DeviceBusy") {
+      return "设备被占用";
+    }
+    if (keyboardStatus === "SleepingOrUnresponsive") {
+      return "休眠或无响应";
+    }
+    if (keyboardStatus === "InvalidResponse") {
+      return "响应异常";
+    }
+    if (keyboardStatus === "Disconnected") {
+      return "已断开";
+    }
+    if (device.receiverStatus === "Present") {
+      return "接收器已连接";
+    }
+    return "已断开";
   }
 
   function formatTime(value) {
@@ -70,7 +132,7 @@
 
     const response = await fetch(path, request);
     if (!response.ok) {
-      let message = `Request failed (${response.status})`;
+      let message = `请求失败（${response.status}）`;
       try {
         const problem = await response.json();
         const firstError = problem.errors && Object.values(problem.errors).flat()[0];
@@ -91,7 +153,7 @@
   function renderStatus(status) {
     currentStatus = status;
     const stateKey = status.isPaused ? "paused" : canonicalState(status.aggregateState);
-    const stateLabel = status.isPaused ? "Paused" : displayState(status.aggregateState);
+    const stateLabel = status.isPaused ? "已暂停" : displayState(status.aggregateState);
 
     const stateClass = stateKey === "requiresinput" ? "requires-input" : stateKey;
     stateBanner.className = `state-display state-${stateClass}`;
@@ -100,34 +162,35 @@
     setText("active-sessions", String(status.activeSessionCount ?? 0));
     setText("last-event", formatTime(status.lastEventAt));
     setText("host-mode", status.isPaused
-      ? "Original lighting is restored while control is paused"
+      ? "已恢复原灯效，灯光接管暂停中"
       : status.isPreviewActive
-        ? "A three-second preview is active"
-        : "Lighting control is active");
-    setText("hook-status", status.hookStatus || "Unknown");
+        ? "正在进行三秒灯光预览"
+        : "灯光接管已启用");
+    setText("hook-status", displayValue(status.hookStatus || "Unknown"));
 
     const device = status.device || {};
-    setText("device-model", device.model);
-    setText("device-transport", device.transport);
-    setText("transport-detail", device.transport);
-    setText("receiver-status", device.receiverStatus);
-    setText("keyboard-status", device.keyboardStatus);
-    setText("keyboard-detail", device.keyboardStatus);
+    setText("device-model", displayDeviceModel(device.model));
+    setText("device-transport", displayValue(device.transport));
+    setText("transport-detail", displayValue(device.transport));
+    setText("receiver-status", displayValue(device.receiverStatus));
+    setText("keyboard-status", displayValue(device.keyboardStatus));
+    setText("keyboard-detail", displayValue(device.keyboardStatus));
     setText("firmware-version", device.firmwareVersion);
     setText("device-identity", device.deviceIdentity);
-    setText("interface-fingerprint", device.interfaceFingerprint || "Unknown");
-    setText("support-status", device.supportStatus || "Unknown");
+    setText("interface-fingerprint", device.interfaceFingerprint || "未知");
+    setText("support-status", displayValue(device.supportStatus || "Unknown"));
+    setText("live-state", deviceConnectionLabel(device));
 
     const error = document.getElementById("device-error");
     error.hidden = !device.lastErrorCode;
-    error.textContent = device.lastErrorCode ? `Diagnostic code: ${device.lastErrorCode}` : "";
+    error.textContent = device.lastErrorCode ? `诊断代码：${device.lastErrorCode}` : "";
 
     renderBaselineRecovery(status.baselineRecovery);
 
-    pauseButton.querySelector(".action-title").textContent = status.isPaused ? "Resume" : "Pause";
+    pauseButton.querySelector(".action-title").textContent = status.isPaused ? "恢复" : "暂停";
     pauseButton.querySelector(".action-description").textContent = status.isPaused
-      ? "Resume state-driven side lighting"
-      : "Restore lighting and stop updates";
+      ? "恢复按状态驱动的侧灯"
+      : "恢复原灯效并停止更新";
   }
 
   function renderBaselineRecovery(risk) {
@@ -144,8 +207,8 @@
     }
 
     document.getElementById("baseline-recovery-message").textContent = risk.message;
-    setText("baseline-device-identity", risk.baselineDeviceIdentity || "Hidden device instance");
-    setText("observed-device-identity", risk.observedDeviceIdentity || "Hidden device instance");
+    setText("baseline-device-identity", risk.baselineDeviceIdentity || "隐藏的设备实例");
+    setText("observed-device-identity", risk.observedDeviceIdentity || "隐藏的设备实例");
     if (previousConfirmation !== risk.confirmationId) {
       baselineRecoveryConfirmation.checked = false;
     }
@@ -209,6 +272,11 @@
   }
 
   function appendEvent(event) {
+    if (!sessionDiagnosticsEnabled.checked
+      || !sessionDiagnosticStates.has(canonicalState(event.status && event.status.aggregateState))) {
+      return;
+    }
+
     const list = document.getElementById("event-log");
     const item = document.createElement("li");
     const time = document.createElement("time");
@@ -261,8 +329,8 @@
 
     setText("persisted-diagnostic-count", String(list.children.length));
     setText("persisted-diagnostics-status", entries.length === 0
-      ? "No saved diagnostic entries are available."
-      : `Loaded ${entries.length} saved diagnostic entries.`);
+      ? "没有可用的已保存诊断。"
+      : `已加载 ${entries.length} 条诊断。`);
   }
 
   function summarizePersistedDiagnostic(entry) {
@@ -272,10 +340,10 @@
     const latency = Number(entry.latencyMilliseconds);
 
     if (visualState) {
-      parts.push(`State ${displayState(visualState)}`);
+      parts.push(`状态 ${displayState(visualState)}`);
     }
     if (transportFailure) {
-      parts.push(`Transport ${transportFailure}`);
+      parts.push(`传输 ${transportFailure}`);
     }
     if (entry.latencyMilliseconds !== null
       && entry.latencyMilliseconds !== undefined
@@ -284,7 +352,7 @@
       parts.push(`${latency} ms`);
     }
 
-    return parts.length === 0 ? "No additional fields" : parts.join(" · ");
+    return parts.length === 0 ? "无其他字段" : parts.join(" · ");
   }
 
   function safeDiagnosticToken(value, fallback) {
@@ -294,18 +362,18 @@
 
   function summarizeEventStatus(status) {
     if (!status) {
-      return "No status snapshot";
+      return "无状态快照";
     }
 
     const parts = [
-      `State ${displayState(status.aggregateState)}`,
-      `${Number(status.activeSessionCount ?? 0)} active`
+      `状态 ${displayState(status.aggregateState)}`,
+      `${Number(status.activeSessionCount ?? 0)} 个活动会话`
     ];
     if (status.isPaused) {
-      parts.push("paused");
+      parts.push("已暂停");
     }
     if (status.isPreviewActive) {
-      parts.push("preview active");
+      parts.push("正在预览");
     }
     return parts.join(" · ");
   }
@@ -337,7 +405,7 @@
     try {
       await operation();
     } catch (error) {
-      showNotice(error.message || "The local command failed.", true);
+      showNotice(error.message || "本地命令执行失败。", true);
     } finally {
       button.disabled = false;
     }
@@ -351,7 +419,7 @@
         body: readSettings()
       });
       renderSettings(settings);
-      showNotice("Settings saved.");
+      showNotice("设置已保存。");
     });
   });
 
@@ -362,7 +430,7 @@
         method: "POST",
         body: {}
       });
-      showNotice("Preview started. The previous state returns in 3 seconds.");
+      showNotice("预览已开始，三秒后恢复之前状态。");
       scheduleStatusRefresh();
     });
   });
@@ -374,18 +442,18 @@
         body: { paused: !Boolean(currentStatus && currentStatus.isPaused) }
       });
       renderStatus(status);
-      showNotice(status.isPaused ? "Lighting control paused." : "Lighting control resumed.");
+      showNotice(status.isPaused ? "灯光接管已暂停。" : "灯光接管已恢复。");
     });
   });
 
   document.getElementById("restore-button").addEventListener("click", event => {
-    if (!window.confirm("Restore the exact original side-light state now?")) {
+    if (!window.confirm("现在恢复精确的原始侧灯状态吗？")) {
       return;
     }
 
     runBusy(event.currentTarget, async () => {
       await api("/api/v1/restore", { method: "POST", body: {} });
-      showNotice("Original lighting restored.");
+      showNotice("原始灯效已恢复。");
       scheduleStatusRefresh();
     });
   });
@@ -400,30 +468,75 @@
     syncBaselineRecoveryGate();
   }
 
+  function syncSessionDiagnostics() {
+    const enabled = sessionDiagnosticsEnabled.checked;
+    document.getElementById("session-diagnostics-content").hidden = !enabled;
+    document.getElementById("clear-session-log").disabled = !enabled;
+    if (!enabled) {
+      document.getElementById("event-log").replaceChildren();
+      setText("diagnostic-count", "0");
+    }
+  }
+
+  function syncSavedDiagnostics() {
+    const enabled = savedDiagnosticsEnabled.checked;
+    document.getElementById("saved-diagnostics-content").hidden = !enabled;
+    document.getElementById("load-recent-diagnostics").disabled = !enabled;
+    if (!enabled) {
+      document.getElementById("persisted-event-log").replaceChildren();
+      setText("persisted-diagnostic-count", "0");
+      setText("persisted-diagnostics-status", "尚未加载已保存日志。");
+    }
+  }
+
+  function syncHardwareTestGate() {
+    hardwareTestButton.disabled = !hardwareTestEnabled.checked;
+  }
+
+  function resetOptionalFeatures() {
+    sessionDiagnosticsEnabled.checked = false;
+    savedDiagnosticsEnabled.checked = false;
+    hardwareTestEnabled.checked = false;
+    syncSessionDiagnostics();
+    syncSavedDiagnostics();
+    syncHardwareTestGate();
+  }
+
   baselineRecoveryConfirmation.addEventListener("change", syncBaselineRecoveryGate);
   window.addEventListener("pageshow", resetBaselineRecoveryConfirmation);
   resetBaselineRecoveryConfirmation();
 
+  sessionDiagnosticsEnabled.addEventListener("change", syncSessionDiagnostics);
+  savedDiagnosticsEnabled.addEventListener("change", syncSavedDiagnostics);
+  hardwareTestEnabled.addEventListener("change", syncHardwareTestGate);
+  window.addEventListener("pageshow", resetOptionalFeatures);
+  resetOptionalFeatures();
+
   hardwareTestButton.addEventListener("click", event => {
+    if (!hardwareTestEnabled.checked) {
+      showNotice("请先勾选启用硬件测试。", true);
+      return;
+    }
+
     const selectedTransport = document.querySelector('input[name="hardware-transport"]:checked');
     runBusy(event.currentTarget, async () => {
       const result = await api("/api/v1/hardware-test", {
         method: "POST",
         body: { transport: selectedTransport.value }
       });
-      showNotice(result.message || (result.succeeded ? "Hardware test completed." : "Hardware test did not pass."), !result.succeeded);
+      showNotice(result.message || (result.succeeded ? "硬件测试已完成。" : "硬件测试未通过。"), !result.succeeded);
       scheduleStatusRefresh();
-    });
+    }).finally(syncHardwareTestGate);
   });
 
   baselineRecoveryButton.addEventListener("click", event => {
     const risk = currentBaselineRecovery;
     if (!risk || !baselineRecoveryConfirmation.checked) {
-      showNotice("Confirm the device mismatch disposition first.", true);
+      showNotice("请先确认设备不匹配处理方式。", true);
       return;
     }
 
-    if (!window.confirm("Abandon the old device's baseline ownership without writing its saved bytes to the currently connected device?")) {
+    if (!window.confirm("放弃旧设备的基线接管标记，并且不把旧数据写入当前设备吗？")) {
       resetBaselineRecoveryConfirmation();
       return;
     }
@@ -437,7 +550,7 @@
         method: "POST",
         body: { confirmationId: risk.confirmationId, confirmed: true }
       });
-      showNotice(result.message || "Old baseline ownership abandoned.");
+      showNotice(result.message || "已放弃旧基线接管标记。");
       await refreshStatus();
     }).finally(syncBaselineRecoveryGate);
   });
@@ -450,24 +563,28 @@
   });
 
   document.getElementById("load-recent-diagnostics").addEventListener("click", event => {
+    if (!savedDiagnosticsEnabled.checked) {
+      showNotice("请先勾选启用已保存诊断。", true);
+      return;
+    }
+
     runBusy(event.currentTarget, async () => {
       const entries = await api("/api/v1/diagnostics?limit=50");
       renderPersistedDiagnostics(Array.isArray(entries) ? entries : []);
-    });
+    }).finally(syncSavedDiagnostics);
   });
 
   Promise.all([
     refreshStatus(),
     api("/api/v1/settings").then(renderSettings)
   ]).catch(error => {
-    showNotice(error.message || "Unable to load local control state.", true);
+    showNotice(error.message || "无法加载本地控制状态。", true);
   });
 
   const eventSource = new EventSource("/api/v1/events");
   eventSource.onopen = () => {
     document.getElementById("connection-label").classList.remove("is-disconnected");
-    setText("connection-text", "Connected");
-    setText("live-state", "Connected");
+    setText("connection-text", "主机已连接");
   };
   eventSource.onmessage = message => {
     try {
@@ -484,7 +601,9 @@
   };
   eventSource.onerror = () => {
     document.getElementById("connection-label").classList.add("is-disconnected");
-    setText("connection-text", "Reconnecting");
-    setText("live-state", "Reconnecting");
+    setText("connection-text", "正在重连");
+    if (!currentStatus) {
+      setText("live-state", "状态不可用");
+    }
   };
 })();
