@@ -12,16 +12,47 @@
       "docs/PROTOCOL.md"
     ]
   },
-  "notes": "The 64-byte request reports use fixed test session key 0x5A and are deterministically derived from the pinned source; they are not new M0 hardware captures. The baseline-example payload reuses an upstream documented device-read example and must never be treated as a universal restore value.",
+  "officialNuPhyIoEvidence": {
+    "mainBundleUrl": "https://drive.nuphy.io/static/js/main.f6f60294.js",
+    "lightingChunkUrl": "https://drive.nuphy.io/static/js/686.189b2dd0.chunk.js",
+    "keyboardApiProductIdHex": "1026",
+    "u1CapabilityProductIdHex": "2620",
+    "getBaseInfoCommandHex": "A0",
+    "getBaseInfoRequest": "address 0 length 8 handle 0",
+    "currentModeSource": "decoded response payload byte 0; allowed values 0 or 1",
+    "lightingHandleEncoding": "report byte 7 = currentMode XOR session key",
+    "observedWriteSequence": "address 9 length 8, then address 10 length 1 when brightness is present",
+    "firmwareVersionChecked": "4.0.18",
+    "firmwareVersionBranchObserved": false
+  },
+  "notes": "The 64-byte request reports use fixed test session key 0x5A and currentMode 1 after the A0 base-info read. They are deterministic evidence-derived vectors, not new M0 hardware captures. The pinned USB --test-green path writes address 9 length 8 followed by address 10 length 1, then restores in the same order. The baseline-example payload reuses an upstream documented device-read example and must never be treated as a universal restore value.",
   "sessionKeyHex": "5A",
+  "currentModeHex": "01",
+  "responseVectorClassification": "deterministic-derived-not-hardware-captured",
+  "sessionExchange": {
+    "challengeHex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+    "requestFrameHex": "55ee00b0000000005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+    "responseFrameHex": "aaee00685a5a5a5a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  },
   "allowedDirections": [
     "55",
     "AA"
   ],
   "allowedCommands": [
     "EE",
+    "A0",
     "D5",
     "D6"
+  ],
+  "allowedSetLightSlices": [
+    {
+      "address": 9,
+      "logicalLength": 8
+    },
+    {
+      "address": 10,
+      "logicalLength": 1
+    }
   ],
   "sideStates": [
     {
@@ -53,13 +84,24 @@
   ],
   "reports": [
     {
+      "name": "get-base-info",
+      "directionHex": "55",
+      "commandHex": "A0",
+      "logicalLength": 8,
+      "address": 0,
+      "currentMode": 0,
+      "payloadHex": "",
+      "frameHex": "55a00060525a5a5a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
       "name": "get-light-state",
       "directionHex": "55",
       "commandHex": "D5",
       "logicalLength": 17,
       "address": 0,
+      "currentMode": 1,
       "payloadHex": "",
-      "frameHex": "55d500594b5a5a5a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      "frameHex": "55d5005a4b5a5a5b0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     },
     {
       "name": "set-side-green",
@@ -67,8 +109,9 @@
       "commandHex": "D6",
       "logicalLength": 8,
       "address": 9,
+      "currentMode": 1,
       "payloadHex": "026401000000ff00",
-      "frameHex": "55d6005752535a5a583e5b5a5a5aa55a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      "frameHex": "55d6005852535a5b583e5b5a5a5aa55a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     },
     {
       "name": "restore-baseline-example",
@@ -76,8 +119,71 @@
       "commandHex": "D6",
       "logicalLength": 8,
       "address": 9,
+      "currentMode": 1,
       "payloadHex": "0064010100e9fffb",
-      "frameHex": "55d600fa52535a5a5a3e5b5b5ab3a5a1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      "frameHex": "55d600fb52535a5b5a3e5b5b5ab3a5a1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "set-side-brightness-100",
+      "directionHex": "55",
+      "commandHex": "D6",
+      "logicalLength": 1,
+      "address": 10,
+      "currentMode": 1,
+      "payloadHex": "64",
+      "frameHex": "55d6009e5b505a5b3e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "restore-side-brightness-zero",
+      "directionHex": "55",
+      "commandHex": "D6",
+      "logicalLength": 1,
+      "address": 10,
+      "currentMode": 1,
+      "payloadHex": "00",
+      "frameHex": "55d600ba5b505a5b5a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "responses": [
+    {
+      "name": "get-base-info-mode-one",
+      "directionHex": "AA",
+      "commandHex": "A0",
+      "logicalLength": 8,
+      "address": 0,
+      "currentMode": 0,
+      "payloadHex": "0100000000000000",
+      "frameHex": "aaa00031525a5a5a5b5a5a5a5a5a5a5a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "get-light-state-baseline-example",
+      "directionHex": "AA",
+      "commandHex": "D5",
+      "logicalLength": 17,
+      "address": 0,
+      "currentMode": 1,
+      "payloadHex": "0000000000000000000064010100e9fffb",
+      "frameHex": "aad500254b5a5a5b5a5a5a5a5a5a5a5a5a5a3e5b5b5ab3a5a1000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "set-side-green-ack",
+      "directionHex": "AA",
+      "commandHex": "D6",
+      "logicalLength": 8,
+      "address": 9,
+      "currentMode": 1,
+      "payloadHex": "026401000000ff00",
+      "frameHex": "aad6005852535a5b583e5b5a5a5aa55a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "set-side-brightness-ack",
+      "directionHex": "AA",
+      "commandHex": "D6",
+      "logicalLength": 1,
+      "address": 10,
+      "currentMode": 1,
+      "payloadHex": "",
+      "frameHex": "aad600605b505a5b0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     }
   ]
 }
