@@ -23,7 +23,7 @@ dotnet test --no-restore
 dotnet format --verify-no-changes
 ```
 
-The App project is an M0 skeleton that currently exits after initialization; do not present it as a runnable product.
+The App project contains the M1–M3 Host, Hook, tray, and local control-page implementation. Do not present it as a fully validated product until the supervised real Codex/USB acceptance is recorded and the M4 packaging/startup work is complete.
 
 Do not run `hardware-test --transport usb|dongle` casually. It writes keyboard lighting and requires M1 allowlists, response validation, baseline capture, and guaranteed restoration.
 

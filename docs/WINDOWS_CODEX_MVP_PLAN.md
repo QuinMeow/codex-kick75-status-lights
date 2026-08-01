@@ -1,8 +1,9 @@
 # Kick75 Codex 状态灯：Windows MVP 实现计划（USB + 2.4G）
 
 > 版本：v0.2（双连接修订草案）
-> 日期：2026-07-31
-> 当前阶段：M0 工程与测试基线已完成；尚未开始 M1 真机灯效写入验证
+> 日期：2026-08-01
+> 当前阶段：M1–M3 软件实现已完成收敛与自动化/浏览器验证；USB profile 已通过 M1 真机闸门，
+> U1 仍为 diagnostic-only；M2 真实 Codex lifecycle Hook 与 NuPhyIO 真机 `DeviceBusy` 验收已按用户决定延期
 
 ## 1. 结论先行
 
@@ -13,7 +14,8 @@
 - Windows 运行时使用新的 C#/.NET 代码实现，不逐行翻译 Python、C/IOKit 和 SwiftUI；但复用上游协议规范、行为契约、测试向量和 MIT 来源历史。
 - 运行形态是**当前用户的 Windows 托盘进程**。它常驻接收 Codex Hooks、独占 HID、维护状态；设置界面是由托盘进程在 loopback 地址提供的本地静态页面。
 - MVP 从第一版同时面向两条连接路径：USB 直连 `0x1026` 与 U1 2.4G 接收器 `0x2620`。两者共享协议 codec 和状态机，但使用独立的 transport profile、在线判断和测试记录。
-- 第一技术闸门不是 UI，而是 Windows 真机分别在 USB 和 2.4G 下完成：**读取侧灯原状态 → 显示绿色 5 秒 → 逐字节恢复原状态**。
+- 第一技术闸门不是 UI，而是 Windows USB 真机完成：**读取侧灯原状态 → 显示绿色 5 秒 →
+  逐字节恢复原状态**。该闸门已于 2026-08-01 通过；U1 在取得远端型号和独立协议证据前不进入写入测试。
 
 这既不是原样移植，也不是与上游脱离的纯 greenfield：仓库与协议继承上游，Windows 平台代码保持干净的新边界。
 
@@ -46,7 +48,8 @@
 ### 3.1 本期必须完成
 
 - Windows 11 x64、当前用户进程，不要求管理员权限；
-- Kick75 **NuPhyIO 固件版**的双连接支持：USB 直连 `VID 0x19F5 / PID 0x1026`，以及 U1 2.4G 接收器 `VID 0x19F5 / PID 0x2620`；
+- Kick75 **NuPhyIO 固件版**的双连接目标：USB 直连 `VID 0x19F5 / PID 0x1026` 已进入灯控，
+  U1 2.4G 接收器 `VID 0x19F5 / PID 0x2620` 当前只进入识别与只读诊断；
 - 自动识别当前 transport；如果 USB 与接收器同时存在，按明确策略只选择一个活动设备，绝不向两个路径广播灯光写入；
 - 使用 Codex 官方 lifecycle Hooks 获取状态；
 - 一个托盘进程、一个 Hook 入口、一个本地设置页；
@@ -80,11 +83,14 @@ Kick75 High 的当前可观察 USB PID 是 `0x1027`。MVP 先允许诊断工具�
 | 控制接口 | Usage Page `0x0001`、Usage `0x0000` | `MI_03`，Usage Page `0x0001`、Usage `0x0000`，`HID_IsReadOnly = FALSE` |
 | HID 报告 | Report ID `0`，64 字节协议帧 | 官方 NuPhyIO 对该接口同样使用 Report ID `0` 和 64 字节发送缓冲 |
 | 官方关联 | Kick75 IO app PID | Kick75 IO 的 `dongleIds` 指向 U1 Dongle；前端设备配置为 `dongleType: "U1"` |
-| 侧灯能力 | Kick75 协议已在上游 USB 实现验证 | 官方前端为 Kick75 声明 `sideLight: 5`，并通过 U1 暴露控制路径 |
-| 当前结论 | 纳入 MVP | **纳入 MVP**；不再归入“未来研究” |
-| 尚缺证据 | Windows 真机 20 次写入/恢复 | 2.4G 真机握手、读回、写入/恢复 20 次 |
+| 侧灯能力 | Kick75 协议已在上游及本次 Windows USB 闸门验证 | 官方前端为 Kick75 声明 `sideLight: 5`，但通用 U1 capability 未证明可直接发送 Kick75 D6 |
+| 当前结论 | `Verified`：当前设备与回退固件组合 | Diagnostic-only；禁止写入 |
+| 尚缺证据 | 修正后的实现尚未在 `v4.0.18` 上复测 | 远端 Kick75 身份、独立协议 envelope 与后续真机门槛 |
 
-官方配置与本机 HID descriptor 已足以确认 U1 是 Kick75 NuPhyIO 的受支持控制通道，因此 2.4G 可以进入实现范围；但“接收器已枚举”不等于“键盘已唤醒并可响应”。正式标记为 `Verified` 仍以 M1 的真机往返和逐字节恢复结果为准。
+官方配置与本机 HID descriptor 证明 U1 capability 存在，但当前 NuPhyIO 只把 `0x1026` 纳入
+Kick75 keyboard API；这不足以证明可向 `0x2620` 直接发送 Kick75 D6。因此 U1 保留在诊断与
+transport 选择范围内，但在取得远端身份和独立协议证据前不进入写入路径。USB 的 `Verified`
+结论来自 2026-08-01 的真机往返与逐字节恢复，仅适用于当次设备与回退固件组合。
 
 ## 4. Codex 状态语义
 
@@ -98,7 +104,7 @@ Kick75 只有一组共享侧灯，且 Hooks 没有“用户已读完成消息”
 | `Thinking` | `UserPromptSubmit`；等待结束后的 `PostToolUse` | 蓝色呼吸 | 对齐官方蓝色语义 |
 | `RequiresInput` | `PermissionRequest`；`PreToolUse` 匹配 `request_user_input` | 琥珀色闪烁或呼吸 | 对齐官方琥珀色语义 |
 | `Complete` | `Stop` | 绿色保持 10 秒，然后退出该 turn 的显示竞争 | 10 秒是“未读”状态的近似，因为 Hooks 没有 read 回调 |
-| `Error` | 暂无可靠的会话级 Hook | 数据模型预留，MVP 不伪造红灯 | 普通工具失败不等同 Codex 会话失败 |
+| `Error` | 暂无可靠的会话级 Hook | 语义预留，MVP 状态类型不新增或伪造红灯 | 普通工具失败不等同 Codex 会话失败 |
 
 不要把一次非零工具退出直接映射成红色：Codex 往往会继续纠正。如果以后官方提供可靠的 turn/session failure 事件，或真机/真实会话验证出稳定字段，再启用 `Error`。
 
@@ -123,15 +129,15 @@ RequiresInput > Thinking > Complete > Idle
 ```mermaid
 flowchart LR
     C["Codex lifecycle Hooks"] --> H["AgentKick75.exe hook"]
-    H -->|"当前用户 Named Pipe；最小化事件"| T["Windows 托盘 Host"]
+    H -->|"随机 loopback 端口 + 实例 token；最小化事件"| T["Windows 托盘 Host"]
     T --> R["Codex 状态 Reducer"]
     R --> L["灯效调度器"]
     L --> W["单线程 HID Worker"]
     W --> X{"Transport Profile"}
     X -->|"USB 0x1026"| U["Kick75 USB HID"]
-    X -->|"U1 0x2620"| D["U1 Dongle HID"]
+    X -->|"U1 0x2620；诊断"| D["U1 Dongle HID"]
     U --> K["Kick75 NuPhyIO 侧灯"]
-    D -->|"2.4G"| K
+    D -.->|"写入待独立协议证据"| K
     T -->|"127.0.0.1 HTTP + SSE"| P["本地静态控制页"]
     P -->|"设置、试灯、暂停、恢复"| T
 ```
@@ -141,7 +147,8 @@ flowchart LR
 - `.NET 10 LTS` + C#；使用 self-contained 发布，用户无需预装 .NET。微软当前支持计划中 .NET 10 支持到 2028-11；
 - WinForms `NotifyIcon` + .NET Generic Host：实现无主窗口托盘进程；
 - ASP.NET Core Minimal API/Kestrel：只绑定 loopback，并从程序集提供原生 HTML/CSS/JavaScript；
-- `NamedPipeServerStream`：Hook 进程向托盘进程投递事件；
+- loopback HTTP：Hook 进程使用每次 Host 启动发布的随机端口和实例 token 投递事件；
+- `NamedPipeServerStream`：当前用户 CLI `status` 与 Host 诊断通道；
 - Win32 HID/SetupAPI P/Invoke：枚举复合 HID 接口并进行异步 input/output report 读写；
 - xUnit：协议、状态、配置、安装器和模拟 HID 测试。
 
@@ -173,11 +180,13 @@ M0 基线验证完成后，工作树精简为 Windows/.NET 实现；上游 macOS
 `AgentKick75.exe` 根据参数进入不同模式：
 
 - 无参数：启动单实例托盘 Host；
-- `hook codex`：读取 stdin Hook JSON、投递 Named Pipe、立即退出；
-- `hardware-test --transport auto|usb|dongle`：在选定连接路径执行安全的读取/绿灯/恢复测试；
+- `hook codex`：读取 stdin Hook JSON、投递经实例 token 认证的 loopback 入口、立即退出；
+- `hardware-test --transport auto|usb|dongle`：`auto`/`dongle` 默认只做安全诊断；USB profile
+  直接执行读取/绿灯/恢复测试；
 - `install`：安装用户级 Hooks 和登录启动项；
 - `uninstall`：恢复灯效并只移除本项目写入的配置；
-- `status`：输出用于诊断的设备和 Host 状态，不包含会话正文。
+- `status`：通过专用 allowlist DTO 输出设备和 Host 状态，设备身份只保留 `VID:PID`，不包含
+  raw HID path、serial、baseline 确认 ID 或会话正文。
 
 托盘菜单至少包含：打开控制页、暂停/恢复接管、恢复原灯效、硬件测试、开机启动、退出。
 
@@ -185,7 +194,7 @@ Host 使用当前用户单实例锁。首版不使用 Windows Service，避免 S
 
 ### 6.2 Codex Hook
 
-使用[官方 Hooks](https://learn.chatgpt.com/docs/hooks)，不读取 Codex 的 SQLite、历史文件或 transcript。安装器优先合并用户级 `~/.codex/hooks.json`，并使用官方 `commandWindows` 指向打包后的 EXE。
+使用[官方 Hooks](https://developers.openai.com/codex/hooks)，不读取 Codex 的 SQLite、历史文件或 transcript。安装器优先合并用户级 `~/.codex/hooks.json`，并使用官方 `commandWindows` 指向打包后的 EXE。
 
 MVP 注册：
 
@@ -200,7 +209,8 @@ MVP 注册：
 
 Hook helper 必须：
 
-- 仅读取允许列表字段：`hook_event_name`、`session_id`、`turn_id`、`tool_name` 和必要的时间戳；
+- 仅读取允许列表字段：`hook_event_name`、`session_id`、`turn_id`、`tool_name`，以及仅用于
+  Pre/PostToolUse 配对的 `tool_use_id`；
 - 不保存或传输 `prompt`、`tool_input`、`tool_response`、`last_assistant_message`、transcript 内容；
 - stdin 设置大小上限，JSON 缺字段时安全忽略；
 - stdout 保持为空，固定快速超时；Host 不在线时 fail-open、退出码仍为 0，不阻塞 Codex；
@@ -211,9 +221,10 @@ Hook helper 必须：
 
 ### 6.3 进程间通信
 
-- Pipe 名称包含当前用户 SID 的哈希；ACL 只允许当前 SID；
+- Pipe 名称包含当前用户 SID 的哈希，并使用 `CurrentUserOnly` 限制到当前登录用户；
 - 每条消息是有长度上限的版本化 JSON envelope；
 - Host 收到后先做 schema/事件允许列表验证，再交给状态 reducer；
+- `status-response` 不直接序列化内部恢复 snapshot；Host 与 CLI 两侧都按字段和格式重新裁剪；
 - 不在 Windows 上复用上游的 `os.kill(pid, 0)` 探活。若增加 PID 健康检查，使用 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`、进程创建时间和退出码，防止 PID 复用及误终止进程；
 - `SessionEnd` 不是即时的：官方说明切走会话并不会立刻结束 session。因此还需 stale 清理和真机场景验证。
 
@@ -222,10 +233,11 @@ Hook helper 必须：
 页面由托盘 Host 提供，不让页面直接持有 HID。最低功能：
 
 - 当前聚合状态、活动会话数量和最后事件时间；
-- 设备型号、连接类型、接收器状态、键盘响应状态、固件/descriptor 诊断信息；
+- 安全裁剪的设备 manufacturer/product、连接类型、接收器状态、键盘响应状态和 HID descriptor
+  `bcdDevice`；不得把该 descriptor 版本宣称为 NuPhyIO 固件版本；
 - Thinking/RequiresInput/Complete 的颜色、亮度与完成保持时长；
 - 3 秒试灯、暂停、恢复原灯效、执行硬件测试；
-- 开机启动开关和诊断日志入口；
+- 开机启动偏好开关（M4 才写入 HKCU Run）和诊断日志入口；
 - 通过 SSE 实时刷新，无需 WebSocket 和前端构建工具。
 
 API 草案：
@@ -233,6 +245,7 @@ API 草案：
 ```text
 GET  /api/v1/status
 GET  /api/v1/settings
+GET  /api/v1/diagnostics?limit=50 # 持久脱敏日志的固定 allowlist DTO
 PUT  /api/v1/settings
 POST /api/v1/preview/{state}
 POST /api/v1/pause
@@ -241,21 +254,26 @@ POST /api/v1/hardware-test
 GET  /api/v1/events              # SSE
 ```
 
-Kestrel 只监听随机 loopback 端口；严格检查 Host/Origin，不开放 CORS；写操作需要每次安装生成的随机 token 和自定义 header。网页不能从局域网访问。
+Kestrel 只监听随机 loopback 端口；严格检查 Host/Origin/Fetch Metadata，不开放 CORS；写操作
+需要每次 Host 启动生成的随机 token 和自定义 header。SSE 单独限制连接数、订阅背压和写入时限；
+网页不能从局域网访问，设备诊断也不公开 HID path 或 serial。
 
 ### 6.5 HID 与协议安全边界
 
 上游已研究出的核心协议保持不变：
 
-- MVP transport profile：`kick75-usb` 使用 `VID 0x19F5 / PID 0x1026`；`kick75-u1-dongle` 使用 `VID 0x19F5 / PID 0x2620`；High USB `0x1027` 只诊断、不写入；
+- MVP transport profile：`kick75-usb` 使用 `VID 0x19F5 / PID 0x1026`；`kick75-u1-dongle` 使用 `VID 0x19F5 / PID 0x2620`。当前只有 USB 可进入 guarded 写路径；U1 与 High USB `0x1027` 均只诊断、不写入；
 - 两个 profile 都必须继续按 `Usage Page 0x01`、`Usage 0x00` 和 64 字节 input/output report 筛选复合 HID 接口，不能只取同 VID/PID 的第一个接口；当前 U1 在 Windows 上对应 `MI_03`，但实现以 descriptor 能力为准，不把接口序号作为唯一条件；
-- Report ID 为 `0`；协议帧 64 字节；Windows API/hidapi 是否要求外层 65 字节缓冲区必须在 M1 真机确认；
-- 仅允许 `0xEE` 会话、`0xD5` 读取灯态、`0xD6` 写灯态；
-- 只写 17 字节灯光状态中的侧灯地址 `9`、长度 `8`，不写主键区；
+- Report ID 为 `0`；协议帧 64 字节；Windows 真机已确认原生 input/output 均使用外层 65 字节
+  缓冲区（Report ID 0 + 64 字节协议帧）；
+- 仅允许 `0xEE` 会话、只读 `0xA0` 获取活动 `currentMode`、`0xD5` 读取灯态、`0xD6` 写灯态；
+- `0xA0` payload byte 0 只接受 `0` 或 `1`；D5/D6 byte 7 必须编码该活动 mode，baseline journal
+  同时保存 mode，恢复时不允许静默切换 bank；
+- 只允许侧灯完整 block `address=9,length=8`，以及该 block 内的 brightness 字节 `address=10,length=1`；禁止任意地址写入，不写主键区；
 - 完整保存并恢复原始 8 字节，不能仅按 RGB 重新构造用户灯效；
 - 固件模式 `0x04` 有持久关闭风险，绝不用于动画的“灭相”；
-- 官方 NuPhyIO 当前配置将 Kick75 关联到 U1 `0x2620`，且普通配置命令走同一 64 字节 WebHID transport。MVP 因此先复用同一个协议 codec；如果真机发现 U1 需要额外 envelope，只在 dongle transport 层封装，不污染灯光状态模型；
-- 接收器存在只代表 USB 端点在线。只有 `0xEE` 握手及后续有效响应才能把远端键盘标记为 `Ready`；睡眠、未配对和无线链路中断分别显示为不可响应状态，并在唤醒后限速重试；
+- 官方 NuPhyIO 当前只把 `0x1026` 纳入 Kick75 keyboard API；`0x2620` 是通用 U1 dongle capability，关联关系不能证明可直接发送 Kick75 D6。取得远端型号识别和独立协议证据前，U1 保持 diagnostic-only；
+- 接收器存在只代表 USB 端点在线，当前只读枚举不得把远端键盘标记为 `Ready`。若未来 U1 取得独立协议证据并通过写入评审，届时仍须以 `0xEE` 握手及后续有效响应区分睡眠、未配对和无线链路中断，并在唤醒后限速重试；
 - 所有 HID 操作由单一 worker 串行，严格验证响应方向、命令、长度、checksum、session key 和超时；USB 与 U1 同时出现时只打开选中的 profile，不做双写；
 - bootloader/upgrader PID 不进入白名单，应用不包含任何固件写入 opcode。
 
@@ -269,8 +287,12 @@ NuPhy 官方 NuPhyIO 页面当前也使用 WebHID、Report ID 0 和 64 字节命
 - `baseline.json`：在第一次写灯前落盘，记录设备身份、transport profile、接口指纹、原始 8 字节和 ownership marker；
 - 异常重启若发现未释放的 ownership marker，先尝试恢复旧 baseline，再重新接管，不能把遗留的状态色误存成新基线；
 - 设备身份不匹配时不盲目恢复，要求用户在页面确认；
-- 日志只保留事件类型、匿名 session 哈希、延迟和设备错误码，按大小/天数轮转；
-- 本地文件 ACL 仅当前用户，不记录 prompt 或其他正文。
+- 日志只保留事件类型、匿名 session 哈希、延迟和设备错误码，按大小/天数轮转；诊断目录在
+  logger 生命周期内由不共享 DELETE 的 Windows handle 固定，create/read/delete 使用
+  `OPEN_REPARSE_POINT` 的同一已验证文件 handle，并拒绝 reparse point 和多硬链接文件；
+  活跃 reader 必须在释放目录/文件句柄前排空，文件数上限在删除失败时 fail-closed，读取在
+  同一已锁定 handle 上先检查文件大小上限；
+- 本地文件使用受保护的 Windows ACL，仅允许当前用户、LocalSystem 和本机 Administrators；不记录 prompt 或其他正文。
 
 ## 7. 实施里程碑
 
@@ -288,21 +310,32 @@ NuPhy 官方 NuPhyIO 页面当前也使用 WebHID、Report ID 0 和 64 字节命
 
 - 实现 USB `0x1026` 与 U1 `0x2620` 的设备枚举、interface capability 输出、严格筛选和 transport profile 选择；
 - 实现纯 `Kick75ProtocolCodec` 及 checksum/XOR/golden tests；
-- 实现 `0xEE/0xD5/0xD6` 和超时、ACK 校验；
-- 分别运行 `hardware-test --transport usb` 和 `hardware-test --transport dongle`：读 baseline，绿灯 5 秒，在 `finally` 中逐字节恢复；
-- 记录每个 transport 的 64/65 字节行为、句柄共享、键盘/接收器固件版本、interface path、唤醒状态和读写时序；
-- 验证 U1 已插入但键盘睡眠、未配对或超出范围时不会被误报为 `Ready`，唤醒后可自动恢复握手；
-- 与 NuPhyIO 页面同时打开时验证 DeviceBusy 行为。
+- 实现 `0xEE/0xA0/0xD5/0xD6` 和超时、ACK 校验；USB 先读取活动 `currentMode`，D6 严格执行
+  同 handle 的 `9/8 → 10/1`；公开 lighting transport 只允许完整 pair，不提供单片 D6 入口；
+- 运行 `hardware-test --transport usb`：读 baseline，绿灯 5 秒，关闭目标连接后在同一 descriptor 的新 session 中按 `9/8 → 10/1` 恢复；U1 写测试在协议身份确认前禁止；
+- 记录每个 transport 的 64/65 字节行为、句柄共享、键盘/接收器固件版本、安全的 interface fingerprint/哈希、唤醒状态和读写时序；原始 interface path 不写入仓库或诊断输出；
+- 验证 U1 只读枚举不会因接收器已插入而误报远端键盘为 `Ready`；睡眠/未配对识别和唤醒后自动握手延后到取得独立 U1 协议证据并通过写入评审之后；
+- 与 NuPhyIO 页面同时打开时验证 DeviceBusy 行为。自动化已覆盖真实生产适配链的
+  `DeviceBusy → Reconnecting(2s) → Ready`；物理占用仍需用户监督，不能由 mock 结果替代。
 
-单 profile Go 条件：同一台真机在该连接路径连续执行 20 次均成功恢复原 8 字节，且键位、主键灯、固件均未变化。只有 USB 和 U1 两个 profile 都通过，版本才宣称“双连接支持”。
+单 profile Go 条件：同一台真机在该连接路径连续执行 20 次均成功恢复原 8 字节，且键位、主键灯、固件均未变化。USB 已于 2026-08-01 满足该条件；U1 在取得远端身份和独立协议证据前不能执行同一写入闸门。只有未来 USB 和 U1 两个 profile 都通过，版本才可宣称“双连接支持”。
 单 profile No-Go 条件：不能确定接口、响应校验失败、恢复不可靠或需要未知写命令。失败的 profile 保持 `Experimental/Unsupported`，不因另一条路径通过而绕过验证。
+
+USB 验收设备为 `19F5:1026`、`MI_03`、Usage Page `0001`、Usage `0000`、原生
+`in=65/out=65`。活动 `currentMode=1`，baseline 为 `02 28 01 00 00 44 E7 B3`。5 秒预检全部
+阶段为 `true`、`Error=null`；第一批 20 × 5 秒协议与人工观察全部通过，满足正式物理门槛。
+第二批 20 × 5 秒也全部通过协议验证并以 `isOwned=false` 结束，但没有独立的批后人工确认；
+因此总计 40 个成功协议周期，物理 `Verified` 结论仍由第一批 20 次建立。回退固件精确版本未知，
+修正后的实现未在 `v4.0.18` 上复测。
 
 ### M2：状态核心、Hook 和常驻 Host（约 2–3 天）
 
 - 实现 `CodexHookNormalizer`、`TaskStateReducer`、聚合优先级和定时器；
-- 实现单实例托盘、Named Pipe、HID worker、模拟 transport；
+- 实现单实例托盘、loopback Hook 入口、Named Pipe 状态通道、HID worker、模拟 transport；
 - 实现 baseline ownership、暂停/退出恢复、USB 拔插与 U1/键盘睡眠唤醒的分层退避重连；
 - 实现 `hook` 子模式和用户级 Hooks 合并；
+- 使用真实 Hook loopback 入口的各 20 样本分布测试验证在线 P95 `< 300 ms`、Host 离线
+  P95 `< 500 ms`；
 - 用真实 Codex 会话验证 prompt、审批、`request_user_input`、Stop 和 SessionEnd。
 
 验收：真实 prompt 到蓝灯、审批到琥珀灯、Stop 到绿灯再恢复；两个并行 turn 不相互覆盖；Host 离线不影响 Codex。
@@ -310,9 +343,10 @@ NuPhy 官方 NuPhyIO 页面当前也使用 WebHID、Report ID 0 和 64 字节命
 ### M3：本地控制页（约 1–2 天）
 
 - 嵌入静态 HTML/CSS/JS；
-- 实现 status/settings/preview/pause/restore API 和 SSE；
+- 实现 status/settings/preview/pause/restore、持久脱敏 diagnostics API 和 SSE；
 - 实现 loopback、token、Host/Origin 校验；
-- 实现颜色、亮度、完成 TTL、开机启动和设备诊断 UI。
+- 实现颜色、亮度、完成 TTL、开机启动偏好、设备 descriptor metadata 和独立的持久诊断 UI；
+  实际 HKCU 登录启动注册属于 M4。
 
 验收：页面关闭后状态灯继续工作；保存设置立即生效；试灯 3 秒后恢复此前状态；非本机来源不能调用写 API。
 
@@ -336,6 +370,9 @@ NuPhy 官方 NuPhyIO 页面当前也使用 WebHID、Report ID 0 和 64 字节命
 - 可选 WebHID 诊断页。
 
 ## 8. MVP 验收标准
+
+以下是完整“双连接 + 真实 Hook”发布目标，并非当前完成清单。当前只有 USB profile 在上述设备/
+回退固件组合上通过物理闸门；U1 写入、真实 Hook 和 M4 QA 仍未完成。
 
 ### 8.1 功能
 
@@ -398,25 +435,28 @@ CI 不宣称覆盖硬件；真机结果必须单独记录型号、固件、连�
 当前用户设备已经确认：
 
 - 固件为 **NuPhyIO**，不是 QMK/VIA；
-- 当前通过 2.4G 连接，Windows 已枚举 `VID 0x19F5 / PID 0x2620` 的 `Kick75 IO Dongle`；
+- 历史诊断中 Windows 已枚举 `VID 0x19F5 / PID 0x2620` 的 `Kick75 IO Dongle`；
 - Kick 75 Low/High 不是两款不同电子设备，而是同一 Kick75 平台的两种物理配置，产品层面不必区分 High 版本，设备识别层面仍应兼容 PID 0x1026 和 0x1027
-- U1 的可写控制接口为 `MI_03`、Usage Page `0x0001`、Usage `0x0000`；
-- 官方 NuPhyIO 配置把 Kick75 IO 与 U1 Dongle 关联，足以把 2.4G 纳入 MVP。
+- U1 的候选诊断接口为 `MI_03`、Usage Page `0x0001`、Usage `0x0000`；descriptor 可写属性
+  不等于 Kick75 D6 协议已获准写入；
+- 官方 NuPhyIO 配置把 Kick75 IO 与 U1 Dongle 关联，但不足以证明可直接发送 Kick75 D6；
 - 可在开发机上用 USB 有线模式反复试灯；
 - 后台结束运行后，默认空闲恢复原灯。
 
-在双路径真机恢复测试完成前，可以完成 Core、Mock、Hook、托盘和页面，但只能宣称“目标支持”，不能宣称两个 transport 都已验证可用。
+USB 已通过当前设备/回退固件组合的真机恢复测试；在 U1 独立协议证据与后续闸门完成前，只能
+宣称该 USB profile 已验证，不能宣称两个 transport 都已验证可用。
 
 ## 11. 参考资料与取证边界
 
 - [Pixelmoss 原始项目](https://github.com/Pixelmoss/codex-kick75-status-lights)：Codex-only 行为、协议实现、baseline 恢复和测试基线；
 - [alvis 派生项目](https://github.com/alvis-HaoH/agent-kick75-status-lights)：多 Agent 扩展、灯效调度、协议研究和 `0x04` 安全结论；
-- [Codex Hooks 官方文档](https://learn.chatgpt.com/docs/hooks)：事件、输入、`commandWindows`、配置位置、信任与同步 handler 限制；
+- [Codex Hooks 官方文档](https://developers.openai.com/codex/hooks)：事件、输入、`commandWindows`、配置位置、信任与同步 handler 限制；
 - [Codex Micro 官方说明](https://learn.chatgpt.com/docs/features/codex-micro)：状态颜色与交互语义；
 - [NuPhy Kick75 产品页](https://nuphy.com/products/nuphy-kick75)、[固件页](https://nuphy.com/pages/firmware)、[用户手册](https://nuphy.com/pages/user-manual)：NuPhyIO 与 QMK/VIA 是不同 SKU/固件栈；
 - [NuPhyIO 官方页面](https://drive.nuphy.io/?isDemoMode=true)：当前浏览器端 WebHID 行为的实现取证，不作为稳定 API 合约；
 - [NuPhyIO dongleList](https://drive.nuphy.io/api/nuphyIo/dongleList)：U1 app 设备为 `0x19F5:0x2620`，boot/upgrader 为 `0x19F5:0x1020`；
 - [NuPhyIO keyBoardList](https://drive.nuphy.io/api/nuphyIo/keyBoardList)：Kick75 IO app 设备为 `0x19F5:0x1026`，其 `dongleIds` 关联 U1 Dongle；
+- [NuPhyIO main bundle](https://drive.nuphy.io/static/js/main.f6f60294.js) 与 [灯光 chunk 686](https://drive.nuphy.io/static/js/686.189b2dd0.chunk.js)：页面从 `0xA0 GetBase` 取得活动 `currentMode`，D5/D6 使用该 handle；完整侧灯写入序列为 `9/8` 后按 brightness 字段补 `10/1`，且未发现针对 `v4.0.18` 的版本分支；
 - [nuphyctl 逆向记录](https://github.com/fldc/nuphyctl/blob/master/docs/reverse-engineering.md)：独立记录 64 字节报告、`0xEE` 会话和 `0xD5/0xD6` 灯光命令，用于交叉核对；
 - [Chrome WebHID 说明](https://developer.chrome.com/docs/capabilities/hid)、[WebHID 规范](https://wicg.github.io/webhid/index.html)与[保护接口列表](https://github.com/WICG/webhid/blob/main/blocklist.txt)：浏览器授权、安全上下文和设备访问限制；
 - [.NET 发布与支持周期](https://learn.microsoft.com/dotnet/core/releases-and-support)：选择 .NET 10 LTS 的依据。
@@ -425,10 +465,12 @@ CI 不宣称覆盖硬件；真机结果必须单独记录型号、固件、连�
 
 ## 12. 下一步
 
-M0 已完成。下一步在用户明确确认后进入 M1；第一个可交付物不是完整托盘 UI，而是：
+M1–M3 的代码路径已经实现，USB 正式物理闸门也已完成。以下物理验收已按用户决定延期；将来恢复时，
+安装并信任 Hook，以真实 Codex 会话验证 prompt、审批/`request_user_input`、Stop、SessionEnd
+和并行 turn；并让 NuPhyIO 实际占用接口，验证 `DeviceBusy` 退避与释放后收敛。Hook 安装、
+信任确认、登录启动、发布包与其余完整 Windows 异常/冲突 QA 仍属于 M4。
 
-```text
-AgentKick75.exe hardware-test --transport auto|usb|dongle
-```
-
-它输出设备筛选、实际 transport、接收器/键盘响应状态与 report 诊断，安全执行“读取 → 绿色 5 秒 → 原样恢复”，并生成不含用户内容的测试报告。先在用户当前的 U1 2.4G 路径执行，再切换 USB 重复；两个 gate 都通过后，版本才标记为 USB + 2.4G 双支持。
+U1 继续保持 diagnostic-only；在取得远端 Kick75 型号和独立协议证据前，不运行 dongle 写入测试，
+也不因 USB 已通过而提升其状态。若将来重新评审 U1，必须从独立 allowlist、响应验证、baseline
+capture 和保证恢复开始。`v4.0.18` 也必须使用修正后的 A0/currentMode 路径另行复测，不能从当前
+精确版本未知的回退固件结果推断支持。
