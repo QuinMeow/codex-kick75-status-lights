@@ -316,7 +316,10 @@ public sealed class M2EndToEndMockTests
         Assert.NotNull(statusResponse);
         Assert.Equal(PipeMessageKinds.StatusResponse, statusResponse.Kind);
 
-        await SendHookAsync(harness.Client, new
+        var recoveryHookClient = new CapturingPipeClient(
+            harness.PipeName,
+            minimumTimeout: TimeSpan.FromSeconds(2));
+        await SendHookAsync(recoveryHookClient, new
         {
             hook_event_name = "UserPromptSubmit",
             session_id = "session-after-disconnect",
@@ -367,7 +370,9 @@ public sealed class M2EndToEndMockTests
         Assert.True(condition(), failureMessage);
     }
 
-    private sealed class CapturingPipeClient(string pipeName) : IPipeRequestClient
+    private sealed class CapturingPipeClient(
+        string pipeName,
+        TimeSpan? minimumTimeout = null) : IPipeRequestClient
     {
         private readonly NamedPipeRequestClient inner = new(pipeName);
         private readonly ConcurrentQueue<string> capturedPayloads = new();
@@ -384,7 +389,15 @@ public sealed class M2EndToEndMockTests
             capturedPayloads.Enqueue(request.Payload.GetRawText());
             try
             {
-                return await inner.SendAsync(request, expectResponse, timeout, cancellationToken);
+                TimeSpan effectiveTimeout = minimumTimeout is { } configuredMinimum
+                    && timeout < configuredMinimum
+                    ? configuredMinimum
+                    : timeout;
+                return await inner.SendAsync(
+                    request,
+                    expectResponse,
+                    effectiveTimeout,
+                    cancellationToken);
             }
             catch (Exception exception)
             {

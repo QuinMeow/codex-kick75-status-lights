@@ -147,6 +147,14 @@ public sealed class NamedPipeMessageServer : IAsyncDisposable
             {
                 return;
             }
+            catch (IOException)
+            {
+                // Windows can fail an accept while the previous pipe instance is
+                // closing. Recreate the listener instead of permanently faulting
+                // the Host's IPC loop, but avoid a hot retry loop on repeated errors.
+                await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
     }
 
