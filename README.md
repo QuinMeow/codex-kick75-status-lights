@@ -1,6 +1,7 @@
 # AgentKick75 — Codex Kick75 Status Lights for Windows
 
 [![CI](https://github.com/QuinMeow/codex-kick75-status-lights/actions/workflows/ci.yml/badge.svg)](https://github.com/QuinMeow/codex-kick75-status-lights/actions/workflows/ci.yml)
+[![Release: v0.1](https://img.shields.io/badge/release-v0.1-blue.svg)](https://github.com/QuinMeow/codex-kick75-status-lights/releases/tag/v0.1)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 AgentKick75 是面向 Windows 的 Codex 状态灯项目。目标是由当前用户的托盘进程接收
@@ -10,37 +11,61 @@ loopback 本地页面提供设置。
 > [!WARNING]
 > M1–M3 的主体实现和自动化测试已经完成，USB profile 已在一台 Kick75 与当前回退固件组合上
 > 通过正式真机闸门。回退固件的精确版本未记录，修正后的协议尚未在 `v4.0.18` 上复测，因此
-> 此结论不能外推到所有固件。U1 当前仍为 diagnostic-only，禁止写入；项目也尚无 M4 安装包，
+> 此结论不能外推到所有固件。应用运行时固定使用 USB；U1 不在支持范围内，也不参与枚举或选择。M4 已能生成自包含 zip，
 > 真实 Codex Desktop 的 Thinking → Complete 灯光链路已受监督通过；NuPhyIO `DeviceBusy`
 > 物理验收已按用户决定延期。
-> 不要把开发构建当作已验证的日常使用产品。
+> 但安装/卸载与完整 Windows 异常矩阵尚未现场验收。不要把可构建发布包当作已验证的日常使用产品。
+
+## 下载与安装（v0.1 预览版）
+
+从 [GitHub Release v0.1](https://github.com/QuinMeow/codex-kick75-status-lights/releases/tag/v0.1)
+下载 `AgentKick75-win-x64.zip`。该包仅面向 Windows x64，已包含 .NET 运行时；当前版本未签名，
+Windows 可能显示 SmartScreen 提示。
+
+解压到准备长期保留的目录，然后在 PowerShell 中运行：
+
+~~~powershell
+.\AgentKick75.exe install
+.\AgentKick75.exe
+~~~
+
+`install` 会安装 Codex 集成并注册当前用户登录启动项。安装后请完全退出并重新启动 Codex，
+再通过 `/hooks` 检查并信任 Hook。删除程序目录前先执行：
+
+~~~powershell
+.\AgentKick75.exe uninstall
+~~~
+
+预览版只支持 Kick75 NuPhyIO USB `19F5:1026`；U1、Bluetooth 和 QMK/VIA 不在运行时支持范围内。
 
 ## 当前进度
 
 | 阶段 | 状态 | 交付内容 |
 | --- | --- | --- |
 | M0 | 已完成 | .NET 10 solution、Windows 项目边界、CI、固定来源的协议 fixtures |
-| M1 | USB profile 已通过；U1 只诊断 | HID 枚举/筛选、协议 codec、活动 `currentMode`、基线 journal、USB 守护式读取/绿色试灯/读回恢复 |
+| M1 | USB profile 已通过 | USB HID 枚举/筛选、协议 codec、活动 `currentMode`、基线 journal、守护式读取/绿色试灯/读回恢复 |
 | M2 | 已完成；Thinking/Complete 真机链路已通过 | Codex 事件裁剪、状态聚合、托盘 Host、独立 Hook helper、完成通知兼容、HID worker 与重连 |
 | M3 | 已完成 | 受限 loopback 控制页、设置/预览/暂停/恢复、SSE、桌面与移动端浏览器 QA |
-| M4 | 未开始 | 安装、卸载、发布与 Windows QA |
+| M4 | 进行中 | 生命周期、显式恢复、self-contained zip、安装/卸载、登录启动与图标已实现；Windows 真机 QA 待完成 |
 
 自动化测试覆盖协议、状态机、配置、Hook、IPC、HID mock、恢复和控制页；它们不等于真机验证。
-USB 的 `Verified` 结论来自独立的 20 次物理恢复闸门；U1 没有对应协议证据或写入闸门，不能继承
-USB 的结果。
+USB 的 `Verified` 结论来自独立的 20 次物理恢复闸门，不外推到其他连接路径。
 
 ## 目标状态语义
 
 | Codex 状态 | 目标侧灯行为 |
 | --- | --- |
 | Idle | 恢复接管前保存的原始 8 字节侧灯状态 |
-| Thinking | 蓝色呼吸 |
-| Requires input | 琥珀色闪烁或呼吸 |
-| Complete | 绿色保持 10 秒后恢复 |
+| Thinking | 使用网页配置的颜色、静态/呼吸/流光、亮度和流光速度 |
+| Requires input | 等待问题或权限确认；使用对应灯效设置 |
+| Complete | 完成后按 TTL 恢复 |
+| Interrupted | Goal blocked 时保持到下一条用户消息或 SessionEnd |
 | Error | 预留；没有可靠事件前不启用 |
 
 多会话目标优先级为
-`RequiresInput > Thinking > Complete > Idle`。该语义已在 reducer 和 mock 集成测试中实现；
+`RequiresInput > Interrupted > Thinking > Complete > Idle`。每个会话只保存一条当前状态，
+`UserPromptSubmit` 和与等待工具同名的 `PostToolUse` 会清除该会话的等待状态，其他工具完成事件不会误清除等待；`SessionEnd` 直接删除会话。
+Complete 记录只为灯光 TTL 暂存，不计入页面的活动会话数。该语义已在 reducer 和 mock 集成测试中实现；
 真实 Codex Desktop 的 Thinking → Complete 页面与侧灯变化已于 2026-08-01 受监督确认。
 
 ## 硬件支持状态
@@ -48,15 +73,14 @@ USB 的结果。
 | 连接路径 | VID:PID | 当前状态 | 恢复验证 |
 | --- | --- | --- | --- |
 | Kick75 NuPhyIO USB | `19F5:1026` | `Verified`：当前设备与回退固件组合 | 20/20 正式物理周期；另有 20/20 协议复验 |
-| Kick75 + U1 2.4G | `19F5:2620` | 只读诊断；禁止写入 | 不适用 |
+| Kick75 + U1 2.4G | `19F5:2620` | 不支持；不参与运行时枚举 | 不适用 |
 | Kick75 High identity | `19F5:1027` | 只读诊断；禁止写入 | 不适用 |
 | U1 boot/upgrader | `19F5:1020` | 永久排除 | 不适用 |
 | QMK/VIA、Bluetooth | — | 不支持 | 不适用 |
 
 2026-08-01，USB 在 `currentMode=1` 下连续完成 20 次“读取活动模式 → 两阶段写入 → 新 session
 同模式恢复 → 双读回”，用户确认每次绿色与恢复正常，主键灯、按键、配对和 M1/M2 均无异常；
-随后第二批 20 次协议复验也全部通过，最终 `isOwned=false`。U1 必须先取得远端型号和独立协议证据，
-才会重新进入写入评审。
+随后第二批 20 次协议复验也全部通过，最终 `isOwned=false`。
 
 ## 计划架构
 
@@ -69,7 +93,6 @@ flowchart LR
     T --> S["状态聚合与灯效调度"]
     S --> W["单线程 HID Worker"]
     W --> U["Kick75 USB 灯控"]
-    W --> D["U1 只读诊断"]
     T --> L["Loopback 本地设置页"]
 ~~~
 
@@ -102,17 +125,30 @@ dotnet run --project src/windows/AgentKick75.App -- --help
 dotnet run --project src/windows/AgentKick75.App -- status
 ~~~
 
-`hardware-test` 必须显式选择 transport；`auto` 和 `dongle` 只做诊断，USB 直接执行读取、绿灯与恢复：
+生成 `win-x64` self-contained 单文件/zip：
 
 ~~~powershell
-dotnet run --project src/windows/AgentKick75.App -- hardware-test --transport auto
-dotnet run --project src/windows/AgentKick75.App -- hardware-test --transport usb
+powershell -NoProfile -ExecutionPolicy Bypass -File .\eng\publish-win-x64.ps1
+~~~
+
+在发布目录中安装或卸载当前用户集成：
+
+~~~powershell
+.\AgentKick75.exe install
+.\AgentKick75.exe uninstall
+~~~
+
+命令行硬件复验固定使用 USB，不提供 transport 选项：
+
+~~~powershell
+dotnet run --project src/windows/AgentKick75.App -- hardware-test
 ~~~
 
 USB 正式 M1 验收已经在现场监督下通过。需要复验时，直接使用
-`hardware-test --transport usb`；可按需附加 `--cycles` 和 `--green-seconds`。托盘中的“硬件测试…”
-会直接打开控制页，不再要求审阅矩阵、勾选确认或输入额外确认参数。U1 写入仍由后端拒绝。M4 之前没有安装器，
-也不会自动把开发构建注册为登录启动项。
+`hardware-test`；可按需附加 `--cycles` 和 `--green-seconds`。网页不提供硬件测试或连接方式切换入口。
+`install` 会安装 Codex 集成并注册当前用户登录启动；`uninstall` 会先通过在线 Host 显式恢复并
+读回验证原灯效，等待 Host 退出后再只移除本项目写入的配置。Host 离线但存在
+`lighting-restore.json` 时会拒绝卸载。当前 zip 未签名，完整 Windows QA 仍未完成。
 
 ## 项目结构
 
@@ -148,6 +184,7 @@ USB 正式 M1 验收已经在现场监督下通过。需要复验时，直接使
 - [Windows MVP 实现计划](docs/WINDOWS_CODEX_MVP_PLAN.md)
 - [M0 工程与测试基线](docs/M0_BASELINE.md)
 - [M1–M3 实现与验收边界](docs/M1_M3_IMPLEMENTATION.md)
+- [M4 安装、卸载与发布](docs/M4_IMPLEMENTATION.md)
 - [Windows 硬件测试矩阵](docs/WINDOWS_TEST_MATRIX.md)
 - [Kick75 侧灯协议记录](docs/PROTOCOL.md)
 - [来源与第三方说明](NOTICE.md)

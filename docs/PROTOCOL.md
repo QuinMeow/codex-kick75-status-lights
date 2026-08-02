@@ -157,6 +157,17 @@ ownership、人工观察与恢复事务只适用于用户显式启动的 guarded
 键盘已唤醒、`Fn+Tab` 全灯开关为开启且侧灯亮度非零。若未来要自动控制该全局状态，必须先读取、
 持久化并恢复它，不能把它夹带进侧灯测试。
 
+### 应用侧保活边界
+
+控制页提供的“侧灯保活”不修改固件 Auto Sleep。`Codex 任务活跃`策略只按配置间隔重新提交当前
+已经接管的 8 字节侧灯目标；`后台程序运行`策略在 Idle 时读取当前 8 字节侧灯状态，并通过正常的
+ownership journal、同值写回、稳定读回和 release 流程完成一次零视觉差异事务。默认关闭，刷新间隔
+限制为 10–300 秒。
+
+该行为只允许现有 D6 address 9/length 8 与 address 10/length 1 写入，不读取或修改 A3 全局设置、
+主键灯或 `gameOptimization`。NuPhyIO 的 Kick75 能力表未声明独立灯区休眠控制，因此应用侧写入能否
+阻止固件休眠、以及主键区是否会同时保持唤醒，仍需单独实机验收；未通过前不得标记为固件级支持。
+
 常驻 `HidLightingWorker` 通过 Windows transport 复用同一完整 pair，因此每次状态写入也会刷新
 `10/1` brightness 镜像；该 USB pair 的物理写入、恢复以及真实 Codex Thinking → Complete
 状态驱动均已经受监督验证。

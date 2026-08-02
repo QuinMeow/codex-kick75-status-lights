@@ -2,9 +2,13 @@
 
 > Updated: 2026-08-01
 
+> 本文保留 M1–M3 当时的实现与证据。M4 已将运行时 ownership journal、独立 restore 操作和设备
+> 不匹配确认面板替换为最小 `lighting-restore.json`、统一生命周期按钮与自动放弃不匹配旧记录；
+> 当前行为以 `WINDOWS_CODEX_MVP_PLAN.md` 和 `M4_IMPLEMENTATION.md` 为准。
+
 M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文区分“代码路径完成”和
-“物理设备/真实 Codex 会话已验收”：USB profile 已在当前设备与回退固件组合上通过正式
-物理闸门；U1 仍为 diagnostic-only。真实 Codex Desktop 的 Thinking → Complete 页面与
+“物理设备/真实 Codex 会话已验收”：固定的 USB profile 已在当前设备与回退固件组合上通过正式
+物理闸门。真实 Codex Desktop 的 Thinking → Complete 页面与
 侧灯链路已在 2026-08-01 受监督通过。
 
 ## M1: Windows HID gate
@@ -14,12 +18,9 @@ M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文
   只暴露成对的 `WriteSideLightFullStateAsync`；它连续写侧灯 block `9/8` 与 brightness 字节 `10/1`，
   不暴露单片 D6 或任意地址写入 API。
 - `Hid.Windows` 通过 SetupAPI/HID API 枚举并要求 65 字节原生 report（Report ID 0 +
-  64 字节协议帧）。当前只有 USB `19F5:1026` 可进入显式确认的 guarded 写路径；U1
-  `19F5:2620` 与 `1027` 均为 diagnostic-only，`1020` 永久排除。
-- `auto` 确定性优先 USB；首选身份存在但 busy、歧义或协议异常时不会静默降级到另一
-  transport。
-- 每次连接前先读取 owned marker；若存在，worker 会把 marker 的 USB/dongle profile 作为
-  本次连接硬约束。即使两个设备同时存在，同一进程也不会通过另一 profile 尝试恢复。
+  64 字节协议帧）。运行时只选择 USB `19F5:1026`；没有 Auto、dongle 或 fallback 分支。
+- 每次连接前先读取 owned marker；若存在，worker 只接受 `kick75-usb` profile，未知或旧 profile
+  会触发 baseline mismatch，不会改走其他连接路径。
 - USB 守护式测试在第一次 D6 前持久化 baseline ownership journal（包含 `currentMode`），目标与恢复均在
   一次 A0 模式校验后连续执行 `9/8 → 10/1`，两个 D6 之间不插入其他包。目标连接在恢复前关闭；
   超时、取消或坏响应会毒化 client，恢复通过同一
@@ -41,18 +42,18 @@ M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文
 
 同日 30 秒扩展诊断曾出现绿色并恢复，且 `AllBaselinesRestored=true`，但目标阶段的附加检查失败；
 原因未定，该次不计入正式周期。当前回退固件的精确版本未记录，修正后的实现未在 `v4.0.18`
-上复测。U1 仍为 diagnostic-only，禁止写入。
+上复测。非 USB 连接不在当前运行时范围内。
 
 ## M2: state, Hook, and host
 
-- `CodexHookNormalizer` 使用 64 KiB 上限和字段允许列表，只保留事件、session、turn、
-  `tool_name` 与 Pre/PostToolUse 的 `tool_use_id`；prompt、tool payload、assistant message 和
+- `CodexHookNormalizer` 使用 64 KiB 上限和字段允许列表，只保留事件、session、turn，以及
+  PreToolUse/PermissionRequest 状态判断所需的 `tool_name`；prompt、tool ID、tool payload、assistant message 和
   transcript 不进入 IPC 或日志。Pipe 边界再次执行严格 schema 校验，缺失 `kind`、重复或未知字段
   都在触发 reducer 前拒绝。
-- reducer 按 `(session, turn)` 聚合，优先级为
-  `RequiresInput > Thinking > Complete > Idle`，Stop 使用可配置 TTL，过期会清理。并行
-  `request_user_input` 按 `tool_use_id` 精确关联；官方 PermissionRequest 当前没有对应 ID，因此明确
-  保留每 turn 一个无关联等待 latch，不猜测 FIFO 或同名工具配对。
+- reducer 每个 session 只保存一条当前状态，优先级为
+  `RequiresInput > Interrupted > Thinking > Complete > Idle`。`UserPromptSubmit` 与匹配等待工具的 `PostToolUse`
+  将该 session 切回 Thinking；其他工具完成事件不会清除等待，完成通知不会覆盖 RequiresInput 或 Interrupted，`SessionEnd` 直接删除
+  session；Complete 使用可配置 TTL，活动状态另有 stale 清理。
 - 独立控制台程序 `AgentKick75.Hook.exe hook codex` 是 250 ms fail-open 的同步入口；Stop 会按上游实现向 stdout 输出空 JSON 对象，其他事件保持静默。它使用随机 loopback 端口、Host 实例 token
   和版本化 JSON。`status-response` 使用独立 allowlist DTO，Host 与 CLI 两侧都会重建并
   裁剪字符串字段；公开 identity 仅为 `VID:PID`，不包含 path、serial 或 baseline 确认 ID。
@@ -78,8 +79,10 @@ M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文
 - Kestrel 只绑定随机 IPv4 loopback 端口；写 API 要求每次 Host 启动生成的随机 token、自定义
   header、严格 Host/Origin 与 `Sec-Fetch-Site: same-origin`，禁用 CORS/preflight，并限制
   header/body/rate。
-- 页面提供 status、settings、3 秒 preview、pause、restore、硬件测试与 SSE；设置包含三种
-  状态颜色/亮度、Complete TTL 和登录启动偏好。登录启动偏好只持久化，M4 才写 HKCU Run。
+- 页面提供 status、settings、3 秒 preview、pause、restore 与 SSE；Thinking、Requires input、
+  Complete、Interrupted 均可设置颜色、静态/呼吸/流光灯效、亮度与流光速度。Complete 按 TTL 恢复。
+- `update_goal(status=blocked)` 映射为持久 `Interrupted`，后续 Stop 不覆盖；下一次
+  `UserPromptSubmit` 清除阻塞并进入 Thinking。Hook 只读取精确的 `status` 标量，不传输其他输入。
 - `wwwroot` 是单一资产来源，HTML/CSS/JS 以资源嵌入应用程序集，不存在手工压缩副本漂移。
 - Host 将固定枚举的启停、Hook、状态与设备事件写入脱敏 JSONL：session ID 在入队前以
   进程内随机 HMAC 密钥散列，写路径使用有界非阻塞队列，后台按 UTC 日期/大小轮转并限制
@@ -90,7 +93,7 @@ M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文
   fail-closed 并计入 dropped count；读取也会在同一已锁定 handle 上先拒绝超大文件。
 - worker 在 fresh idle 以 5 秒限速执行 descriptor-only inventory；该路径不建立协议 session、
   不打开写连接，也不发送 HID report。USB 文案区分 `descriptor observed` 与
-  `runtime session observed`；严格匹配的 U1/High descriptor 只显示 `DiagnosticOnly`。
+  `runtime session observed`；页面和常驻 transport 只枚举 USB profile。
   若启动时存在未释放 ownership，恢复、读回验证与释放优先于 inventory。页面/API 只公开
   裁剪后的 `VID:PID`、安全 manufacturer/product、interface fingerprint 和
   `HID descriptor bcdDevice 0x....`；该版本值明确标为 descriptor metadata，不宣称是 NuPhyIO
@@ -99,8 +102,7 @@ M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文
   独立限制最多 4 条事件流，并对每次 write/flush 设置 deadline。心跳使用单一周期 timer，避免高频
   状态事件遗留未取消的 delay。确定性测试分别阻塞 write 和 flush，验证 deadline 后 abort、取消、
   订阅释放与 SSE slot 回收。
-- 硬件测试按钮可直接运行 USB 的读取、绿灯与恢复流程，不要求矩阵审阅、复选框或额外确认字段。
-  U1/dongle 选项在页面上禁用并标注 diagnostic-only，后端 No-Go 保持不变。
+- 页面已移除硬件测试区和连接路径切换入口；硬件复验只保留固定 USB 命令行入口。
 
 ### Browser QA and fidelity ledger
 
@@ -114,7 +116,7 @@ M1–M3 的软件范围已经落地并通过自动化与浏览器验证。本文
 | 深石墨背景与蓝色主强调色 | 保留，并为输入请求/完成分别使用琥珀色与绿色 |
 | 顶部聚合状态和五段侧灯预览 | 保留；状态、活动会话、Hook 与事件时间来自 Host |
 | 左侧灯光设置、右侧设备诊断 | 桌面双栏保留；移动端按操作顺序折叠为单栏 |
-| 底部独立硬件测试区 | 保留；明确点击按钮即代表运行 USB 读取、绿灯与恢复测试 |
+| 底部独立硬件测试区 | 已移除；硬件复验只保留 USB 命令行入口 |
 | 紧凑的本地工具视觉 | 保留；实际页面允许纵向滚动，以容纳可访问标签和诊断详情 |
 | 概念中的中文与示例 PID/固件 | 实现使用英文，并只显示 Host 提供的真实值；不伪造固件或 `Verified` 状态 |
 
