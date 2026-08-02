@@ -20,7 +20,6 @@ public sealed class Win32HidConnectionFactoryTests
                 HidTransportProfile.ProtocolReportLength + 1,
                 HidTransportProfile.ProtocolReportLength + 1);
             HidDeviceSelection selection = new(
-                HidTransportPreference.Usb,
                 descriptor,
                 HidTransportProfiles.Kick75Usb,
                 HidDeviceState.Present,

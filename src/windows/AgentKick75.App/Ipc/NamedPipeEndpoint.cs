@@ -61,6 +61,7 @@ public sealed class NamedPipeMessageServer : IAsyncDisposable
 
     private readonly string pipeName;
     private readonly Func<PipeEnvelope, CancellationToken, ValueTask<PipeEnvelope?>> handler;
+    private readonly Func<PipeEnvelope, PipeEnvelope, CancellationToken, ValueTask>? responseFlushed;
     private readonly TimeSpan clientRequestTimeout;
     private readonly CancellationTokenSource stopSource = new();
     private Task? listeningTask;
@@ -68,10 +69,12 @@ public sealed class NamedPipeMessageServer : IAsyncDisposable
     public NamedPipeMessageServer(
         Func<PipeEnvelope, CancellationToken, ValueTask<PipeEnvelope?>> handler,
         string? pipeName = null,
-        TimeSpan? clientRequestTimeout = null)
+        TimeSpan? clientRequestTimeout = null,
+        Func<PipeEnvelope, PipeEnvelope, CancellationToken, ValueTask>? responseFlushed = null)
     {
         this.handler = handler ?? throw new ArgumentNullException(nameof(handler));
         this.pipeName = pipeName ?? UserScope.PipeName;
+        this.responseFlushed = responseFlushed;
         this.clientRequestTimeout = clientRequestTimeout ?? DefaultClientRequestTimeout;
         if (this.clientRequestTimeout <= TimeSpan.Zero ||
             this.clientRequestTimeout > MaximumClientRequestTimeout)
@@ -165,10 +168,11 @@ public sealed class NamedPipeMessageServer : IAsyncDisposable
         NamedPipeServerStream server,
         CancellationToken cancellationToken)
     {
+        PipeEnvelope? request = null;
         PipeEnvelope? response;
         try
         {
-            PipeEnvelope request = await PipeFraming.ReadAsync(server, cancellationToken).ConfigureAwait(false);
+            request = await PipeFraming.ReadAsync(server, cancellationToken).ConfigureAwait(false);
             response = await handler(request, cancellationToken)
                 .AsTask()
                 .WaitAsync(cancellationToken)
@@ -186,6 +190,10 @@ public sealed class NamedPipeMessageServer : IAsyncDisposable
         if (response is not null && server.IsConnected)
         {
             await PipeFraming.WriteAsync(server, response, cancellationToken).ConfigureAwait(false);
+            if (request is not null && responseFlushed is not null)
+            {
+                await responseFlushed(request, response, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 }

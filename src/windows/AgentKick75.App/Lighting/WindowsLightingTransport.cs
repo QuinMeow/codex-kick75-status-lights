@@ -14,7 +14,6 @@ public sealed class WindowsLightingTransport : ILightingTransport
     private readonly HidDeviceSelector selector;
     private readonly IHidConnectionFactory connectionFactory;
     private Kick75HidProtocolClient? client;
-    private HidDeviceSelection? selection;
     private bool disposed;
 
     public WindowsLightingTransport(
@@ -47,8 +46,7 @@ public sealed class WindowsLightingTransport : ILightingTransport
         }
 
         HidDeviceSelection inspected = selector.Select(
-            enumerator.Enumerate(),
-            HidTransportPreference.Auto);
+            enumerator.Enumerate());
         if (inspected.Device is null || inspected.Profile is null)
         {
             return ValueTask.FromResult<LightingDeviceInspection?>(null);
@@ -92,16 +90,15 @@ public sealed class WindowsLightingTransport : ILightingTransport
             throw new InvalidOperationException("The Windows lighting transport is already connected.");
         }
 
-        selection = null;
         IHidReportConnection? connection = null;
         Kick75HidProtocolClient? pendingClient = null;
         try
         {
-            HidTransportPreference preference = ResolvePreference(request.RequiredTransportProfileId);
-            selection = selector.Select(enumerator.Enumerate(), preference);
+            ValidateProfile(request.RequiredTransportProfileId);
+            HidDeviceSelection selection = selector.Select(enumerator.Enumerate());
             if (!selection.IsWritable || selection.Device is null || selection.Profile is null)
             {
-                throw SelectionFailure(selection, preference);
+                throw SelectionFailure(selection);
             }
 
             connection = await connectionFactory.OpenAsync(selection, cancellationToken).ConfigureAwait(false);
@@ -119,9 +116,7 @@ public sealed class WindowsLightingTransport : ILightingTransport
         }
         catch (Exception exception) when (exception is not LightingTransportException)
         {
-            LightingTransportException translated = Translate(
-                exception,
-                selection);
+            LightingTransportException translated = Translate(exception);
             if (connection is not null)
             {
                 await connection.DisposeAsync().ConfigureAwait(false);
@@ -146,7 +141,7 @@ public sealed class WindowsLightingTransport : ILightingTransport
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw Translate(exception, selection);
+            throw Translate(exception);
         }
     }
 
@@ -163,7 +158,7 @@ public sealed class WindowsLightingTransport : ILightingTransport
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw Translate(exception, selection);
+            throw Translate(exception);
         }
     }
 
@@ -172,7 +167,6 @@ public sealed class WindowsLightingTransport : ILightingTransport
         cancellationToken.ThrowIfCancellationRequested();
         Kick75HidProtocolClient? active = client;
         client = null;
-        selection = null;
         if (active is not null)
         {
             await active.DisposeAsync().ConfigureAwait(false);
@@ -198,28 +192,23 @@ public sealed class WindowsLightingTransport : ILightingTransport
             "The Windows HID lighting transport is not connected.");
     }
 
-    private static LightingTransportException SelectionFailure(
-        HidDeviceSelection failedSelection,
-        HidTransportPreference preference)
+    private static LightingTransportException SelectionFailure(HidDeviceSelection failedSelection)
     {
         LightingTransportFailureKind kind = failedSelection.State switch
         {
             HidDeviceState.Busy => LightingTransportFailureKind.DeviceBusy,
-            HidDeviceState.ReceiverPresent => LightingTransportFailureKind.KeyboardSleeping,
             HidDeviceState.Unsupported or HidDeviceState.DiagnosticOnly =>
                 LightingTransportFailureKind.ProtocolViolation,
-            _ when preference == HidTransportPreference.Dongle =>
-                LightingTransportFailureKind.ReceiverUnavailable,
             _ => LightingTransportFailureKind.DeviceDisconnected,
         };
         return new LightingTransportException(kind, failedSelection.Message);
     }
 
-    private static HidTransportPreference ResolvePreference(string? requiredTransportProfileId)
+    private static void ValidateProfile(string? requiredTransportProfileId)
     {
         if (requiredTransportProfileId is null)
         {
-            return HidTransportPreference.Auto;
+            return;
         }
 
         if (string.Equals(
@@ -227,15 +216,7 @@ public sealed class WindowsLightingTransport : ILightingTransport
                 HidTransportProfiles.Kick75Usb.Id,
                 StringComparison.Ordinal))
         {
-            return HidTransportPreference.Usb;
-        }
-
-        if (string.Equals(
-                requiredTransportProfileId,
-                HidTransportProfiles.Kick75U1Dongle.Id,
-                StringComparison.Ordinal))
-        {
-            return HidTransportPreference.Dongle;
+            return;
         }
 
         throw new LightingTransportException(
@@ -253,16 +234,12 @@ public sealed class WindowsLightingTransport : ILightingTransport
             device.HidDescriptorVersionNumber);
     }
 
-    private static LightingTransportException Translate(
-        Exception exception,
-        HidDeviceSelection? currentSelection)
+    private static LightingTransportException Translate(Exception exception)
     {
         LightingTransportFailureKind kind = exception switch
         {
             HidDeviceBusyException => LightingTransportFailureKind.DeviceBusy,
             HidDeviceDisconnectedException => LightingTransportFailureKind.DeviceDisconnected,
-            TimeoutException when currentSelection?.Profile?.Transport == HidTransportPreference.Dongle =>
-                LightingTransportFailureKind.KeyboardSleeping,
             TimeoutException => LightingTransportFailureKind.Timeout,
             Kick75ProtocolException => LightingTransportFailureKind.ProtocolViolation,
             HidTransportException => LightingTransportFailureKind.DeviceDisconnected,

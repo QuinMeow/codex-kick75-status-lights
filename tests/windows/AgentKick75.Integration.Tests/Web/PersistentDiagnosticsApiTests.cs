@@ -215,7 +215,8 @@ public sealed class PersistentDiagnosticsApiTests
             "Idle",
             ActiveSessionCount: 0,
             LastEventAt: null,
-            IsPaused: false,
+            LifecycleState: "Running",
+            FaultCode: null,
             IsPreviewActive: false,
             HookStatus: "Unconfirmed",
             Device: new DeviceDiagnosticsDto(
@@ -255,19 +256,10 @@ public sealed class PersistentDiagnosticsApiTests
         public ValueTask<ControlStatusDto> SetPausedAsync(
             bool isPaused,
             CancellationToken cancellationToken) =>
-            ValueTask.FromResult(Status with { IsPaused = isPaused });
-
-        public ValueTask RestoreOriginalLightingAsync(CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
-
-        public ValueTask<HardwareTestResultDto> RunHardwareTestAsync(
-            HardwareTestRequestDto request,
-            CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new HardwareTestResultDto(
-                false,
-                "unavailable",
-                "Hardware tests are unavailable in this fixture.",
-                request.Transport));
+            ValueTask.FromResult(Status with
+            {
+                LifecycleState = isPaused ? "Paused" : "Running",
+            });
 
         public IAsyncEnumerable<ControlEventDto> WatchEventsAsync(
             CancellationToken cancellationToken) =>

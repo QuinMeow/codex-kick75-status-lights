@@ -72,6 +72,20 @@ public sealed class M2EndToEndMockTests
 
         await SendHookAsync(harness.Client, new
         {
+            hook_event_name = "PostToolUse",
+            session_id = "session-lifecycle",
+            turn_id = "turn-lifecycle",
+            tool_name = "shell_command",
+            tool_response = new { output = toolSecret },
+        });
+        await WaitForAsync(
+            () => harness.Coordinator.GetStatus().AggregateState == TaskVisualState.Thinking
+                && harness.Transport.Writes.Count >= 3,
+            "The matching PostToolUse did not resume the Host and lighting worker.");
+        Assert.Equal(Thinking, harness.Transport.Writes[^1]);
+
+        await SendHookAsync(harness.Client, new
+        {
             hook_event_name = "Stop",
             session_id = "session-lifecycle",
             turn_id = "turn-lifecycle",
@@ -79,7 +93,7 @@ public sealed class M2EndToEndMockTests
         });
         await WaitForAsync(
             () => harness.Coordinator.GetStatus().AggregateState == TaskVisualState.Complete
-                && harness.Transport.Writes.Count >= 3,
+                && harness.Transport.Writes.Count >= 4,
             "The Stop hook did not reach the Host and lighting worker.");
         Assert.Equal(Complete, harness.Transport.Writes[^1]);
 
@@ -96,9 +110,9 @@ public sealed class M2EndToEndMockTests
         Assert.Equal(Baseline, harness.Transport.Writes[^1]);
         Assert.Equal(HookEnablementState.Enabled, harness.Coordinator.GetStatus().HookEnablement);
 
-        Assert.Equal(3, harness.Client.CapturedPayloads.Count);
+        Assert.Equal(4, harness.Client.CapturedPayloads.Count);
         string capturedEnvelopes = string.Join("\n", harness.Client.CapturedPayloads);
-        string[] allowedHookFields = ["kind", "sessionId", "turnId", "toolName", "toolUseId"];
+        string[] allowedHookFields = ["kind", "sessionId", "turnId", "toolName"];
         foreach (string capturedPayload in harness.Client.CapturedPayloads)
         {
             using JsonDocument document = JsonDocument.Parse(capturedPayload);
@@ -143,7 +157,6 @@ public sealed class M2EndToEndMockTests
             session_id = "session-correlated",
             turn_id = "turn-correlated",
             tool_name = "request_user_input",
-            tool_use_id = "ask-1",
             tool_input = new { question = "private-question" },
         });
         await PipeBarrierAsync(harness.PipeName);
@@ -159,7 +172,6 @@ public sealed class M2EndToEndMockTests
             session_id = "session-correlated",
             turn_id = "turn-correlated",
             tool_name = "shell_command",
-            tool_use_id = "unrelated-1",
             tool_response = new { output = "private-output" },
         });
         await PipeBarrierAsync(harness.PipeName);
@@ -174,7 +186,6 @@ public sealed class M2EndToEndMockTests
             session_id = "session-correlated",
             turn_id = "turn-correlated",
             tool_name = "request_user_input",
-            tool_use_id = "ask-1",
             tool_response = new { answer = "private-answer" },
         });
         await PipeBarrierAsync(harness.PipeName);
@@ -223,8 +234,7 @@ public sealed class M2EndToEndMockTests
             () => harness.Coordinator.GetStatus() is
             {
                 AggregateState: TaskVisualState.RequiresInput,
-                ActiveTurnCount: 2,
-                SessionCount: 2,
+                ActiveSessionCount: 2,
             },
             "RequiresInput did not win over the other session's Thinking state.");
 
@@ -247,8 +257,7 @@ public sealed class M2EndToEndMockTests
             () => harness.Coordinator.GetStatus() is
             {
                 AggregateState: TaskVisualState.Thinking,
-                ActiveTurnCount: 2,
-                SessionCount: 2,
+                ActiveSessionCount: 1,
             },
             "The running session did not win over the other session's Complete state.");
 
@@ -273,14 +282,13 @@ public sealed class M2EndToEndMockTests
             () => harness.Coordinator.GetStatus() is
             {
                 AggregateState: TaskVisualState.Complete,
-                ActiveTurnCount: 1,
-                SessionCount: 1,
+                ActiveSessionCount: 0,
             },
-            "SessionEnd removed the wrong composite (session, turn) entry.");
+            "SessionEnd removed the wrong session entry.");
 
-        TaskStateEntry remaining = Assert.Single(harness.Reducer.Snapshot().Turns);
-        Assert.Equal("session-a", remaining.Key.SessionId);
-        Assert.Equal("shared-turn", remaining.Key.TurnId);
+        SessionStateEntry remaining = Assert.Single(harness.Reducer.Snapshot().Sessions);
+        Assert.Equal("session-a", remaining.SessionId);
+        Assert.Equal("shared-turn", remaining.LastTurnId);
     }
 
     [Fact]

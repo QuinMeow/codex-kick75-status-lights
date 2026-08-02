@@ -26,20 +26,18 @@ public sealed record LightingWorkerSnapshot(
     string? InterfaceFingerprint = null,
     LightingDeviceObservationKind DeviceObservation = LightingDeviceObservationKind.None,
     LightingDeviceSupport? DeviceSupport = null,
-    BaselineIdentityMismatchNotice? BaselineMismatch = null,
     LightingDeviceDescriptorMetadata? DescriptorMetadata = null);
 
 public sealed class HidLightingWorker : IAsyncDisposable
 {
     public const int SideLightStateLength = 8;
-    public static TimeSpan HealthProbeInterval { get; } = TimeSpan.FromSeconds(5);
+    public static TimeSpan HealthProbeInterval { get; } = TimeSpan.FromSeconds(10);
 
     private readonly ILightingTransport transport;
     private readonly IBaselineOwnershipStore baselineStore;
     private readonly LayeredReconnectPolicy reconnectPolicy;
     private readonly IReconnectDelay reconnectDelay;
     private readonly TimeProvider timeProvider;
-    private readonly BaselineMismatchRecoveryService baselineMismatchRecovery;
     private readonly Channel<WorkerCommand> commands;
     private readonly CancellationTokenSource stopSource = new();
     private readonly object snapshotGate = new();
@@ -62,18 +60,13 @@ public sealed class HidLightingWorker : IAsyncDisposable
         IBaselineOwnershipStore baselineStore,
         LayeredReconnectPolicy? reconnectPolicy = null,
         IReconnectDelay? reconnectDelay = null,
-        TimeProvider? timeProvider = null,
-        BaselineMismatchRecoveryService? baselineMismatchRecovery = null)
+        TimeProvider? timeProvider = null)
     {
         this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
         this.baselineStore = baselineStore ?? throw new ArgumentNullException(nameof(baselineStore));
         this.reconnectPolicy = reconnectPolicy ?? new LayeredReconnectPolicy();
         this.reconnectDelay = reconnectDelay ?? new SystemReconnectDelay();
         this.timeProvider = timeProvider ?? TimeProvider.System;
-        this.baselineMismatchRecovery = baselineMismatchRecovery ?? new BaselineMismatchRecoveryService(
-            baselineStore as IBaselineMismatchDispositionStore ??
-                RefusingBaselineMismatchDispositionStore.Instance,
-            this.timeProvider);
         commands = Channel.CreateUnbounded<WorkerCommand>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -145,15 +138,23 @@ public sealed class HidLightingWorker : IAsyncDisposable
         return EnqueueAsync(new ProbeCommand(), cancellationToken);
     }
 
-    public async Task<BaselineMismatchRecoveryResult> AbandonMismatchedBaselineAsync(
-        string confirmationId,
-        bool confirmed,
-        CancellationToken cancellationToken = default)
+    public Task RefreshDesiredSideLightAsync(CancellationToken cancellationToken = default)
     {
-        var command = new AbandonMismatchedBaselineCommand(confirmationId, confirmed);
-        await EnqueueAsync(command, cancellationToken).ConfigureAwait(false);
-        return command.Result ?? throw new InvalidOperationException(
-            "The baseline mismatch command completed without a result.");
+        return EnqueueAsync(new RefreshDesiredStateCommand(), cancellationToken);
+    }
+
+    public Task PulseCurrentSideLightAsync(CancellationToken cancellationToken = default)
+    {
+        return EnqueueAsync(new PulseCurrentStateCommand(), cancellationToken);
+    }
+
+    /// <summary>
+    /// Completes an unfinished restore transaction before any Host listener is
+    /// exposed. A missing record succeeds without opening the device.
+    /// </summary>
+    public Task RecoverPendingRestoreAsync(CancellationToken cancellationToken = default)
+    {
+        return EnqueueAsync(new RecoverPendingRestoreCommand(), cancellationToken);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
@@ -163,12 +164,38 @@ public sealed class HidLightingWorker : IAsyncDisposable
             return;
         }
 
+        if (stopSource.IsCancellationRequested)
+        {
+            try
+            {
+                await processingTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stopSource.IsCancellationRequested)
+            {
+            }
+
+            return;
+        }
+
         if (!stopping)
         {
             await EnqueueAsync(new StopCommand(), cancellationToken).ConfigureAwait(false);
         }
 
         await processingTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public void RequestCancellation()
+    {
+        try
+        {
+            stopSource.Cancel();
+        }
+        catch (Exception)
+        {
+            // Stop has already failed. Cancellation is best-effort and must not
+            // replace the restore failure returned to the Host.
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -228,7 +255,11 @@ public sealed class HidLightingWorker : IAsyncDisposable
                 }
                 catch (Exception exception)
                 {
-                    UpdateSnapshot(LightingWorkerState.Faulted);
+                    UpdateSnapshot(
+                        LightingWorkerState.Faulted,
+                        exception is LightingTransportException transportException
+                            ? transportException.Kind
+                            : null);
                     command.Completion.TrySetException(exception);
                 }
             }
@@ -236,6 +267,14 @@ public sealed class HidLightingWorker : IAsyncDisposable
         finally
         {
             commands.Writer.TryComplete();
+            var stoppedToken = cancellationToken.IsCancellationRequested
+                ? cancellationToken
+                : new CancellationToken(canceled: true);
+            while (commands.Reader.TryRead(out WorkerCommand? pending))
+            {
+                pending!.Completion.TrySetCanceled(stoppedToken);
+            }
+
             UpdateSnapshot(LightingWorkerState.Stopped);
         }
     }
@@ -282,7 +321,11 @@ public sealed class HidLightingWorker : IAsyncDisposable
                 desiredState = null;
                 targetInitialized = true;
                 InvalidatePendingRetry();
-                await ReconcileAsync(cancellationToken).ConfigureAwait(false);
+                await RestoreIfOwnedAsync(cancellationToken).ConfigureAwait(false);
+                await DisconnectAsync(cancellationToken).ConfigureAwait(false);
+                descriptorObservation = null;
+                reconnectAttempt = 0;
+                UpdateSnapshot(paused ? LightingWorkerState.Paused : LightingWorkerState.Idle);
                 return true;
 
             case QuiesceCommand:
@@ -298,40 +341,31 @@ public sealed class HidLightingWorker : IAsyncDisposable
                 await ProbeIfDueAsync(cancellationToken).ConfigureAwait(false);
                 return true;
 
-            case AbandonMismatchedBaselineCommand abandon:
-                LightingDeviceInspection? currentDevice;
-                try
+            case RefreshDesiredStateCommand:
+                if (!paused && desiredState is not null)
                 {
-                    currentDevice = await transport.InspectAsync(cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    currentDevice = null;
-                }
-
-                descriptorObservation = currentDevice;
-                abandon.Result = await baselineMismatchRecovery.AbandonAsync(
-                    abandon.ConfirmationId,
-                    abandon.Confirmed,
-                    currentDevice,
-                    cancellationToken).ConfigureAwait(false);
-                if (abandon.Result.Succeeded)
-                {
-                    // Disposition is deliberately software-only. Keep the newest
-                    // desired state staged, but require an explicit Resume before
-                    // any new baseline capture or lighting write can occur.
-                    paused = true;
-                    activeBaseline = null;
                     InvalidatePendingRetry();
-                    UpdateSnapshot(LightingWorkerState.Paused);
-                }
-                else
-                {
-                    LightingWorkerSnapshot current = Snapshot;
-                    UpdateSnapshot(current.State, current.LastFailure);
+                    await ReconcileAsync(cancellationToken).ConfigureAwait(false);
                 }
 
+                return true;
+
+            case PulseCurrentStateCommand:
+                await PulseCurrentStateAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+
+            case RecoverPendingRestoreCommand:
+                BaselineOwnershipRecord? pending = await baselineStore.LoadAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (pending?.IsOwned == true)
+                {
+                    await EnsureConnectedAsync(pending, cancellationToken).ConfigureAwait(false);
+                    await DisconnectAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                descriptorObservation = null;
+                reconnectAttempt = 0;
+                UpdateSnapshot(LightingWorkerState.Idle);
                 return true;
 
             case RetryCommand retry when retry.Generation == retryGeneration:
@@ -383,6 +417,38 @@ public sealed class HidLightingWorker : IAsyncDisposable
         }
     }
 
+    private async ValueTask PulseCurrentStateAsync(CancellationToken cancellationToken)
+    {
+        if (paused || desiredState is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            UpdateSnapshot(LightingWorkerState.Applying);
+            await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+            await EnsureBaselineOwnedAsync(cancellationToken).ConfigureAwait(false);
+            BaselineOwnershipRecord baseline = activeBaseline ?? throw new InvalidOperationException(
+                "A side-light keep-awake pulse requires a captured baseline.");
+
+            // The pulse deliberately writes the exact state just captured. The
+            // normal restore transaction supplies durable recovery, readback,
+            // and ownership release even though the intended visual delta is zero.
+            await RestoreAndReleaseAsync(baseline, cancellationToken).ConfigureAwait(false);
+            activeBaseline = null;
+            await DisconnectAsync(cancellationToken).ConfigureAwait(false);
+            descriptorObservation = null;
+            reconnectAttempt = 0;
+            lastHealthProbeAt = timeProvider.GetUtcNow();
+            UpdateSnapshot(LightingWorkerState.Idle);
+        }
+        catch (LightingTransportException exception)
+        {
+            await HandleTransportFailureAsync(exception, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private ValueTask EnsureConnectedAsync(CancellationToken cancellationToken) =>
         EnsureConnectedAsync(persistedOverride: null, cancellationToken);
 
@@ -395,19 +461,13 @@ public sealed class HidLightingWorker : IAsyncDisposable
             return;
         }
 
-        // Recovery identity must constrain device selection before any HID handle
-        // is opened. Falling back to Auto here could restore dongle bytes through
-        // USB (or vice versa) when both profiles are visible.
+        // Validate an owned record's profile before opening any HID handle. Old
+        // or unknown profiles must fail closed; the runtime only selects USB.
         BaselineOwnershipRecord? persisted = persistedOverride ??
             await baselineStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-        if (persisted?.IsOwned != true)
-        {
-            await baselineMismatchRecovery.ClearAsync(cancellationToken).ConfigureAwait(false);
-        }
-
         LightingConnectionRequest connectionRequest = persisted?.IsOwned == true
             ? LightingConnectionRequest.ForOwnedBaseline(persisted.TransportProfile)
-            : LightingConnectionRequest.Auto;
+            : LightingConnectionRequest.Usb;
         LightingDeviceSession connected = await transport
             .ConnectAsync(connectionRequest, cancellationToken)
             .ConfigureAwait(false);
@@ -418,34 +478,29 @@ public sealed class HidLightingWorker : IAsyncDisposable
                 BaselineRecoveryDecision decision = PlanOwnedRecovery(persisted, connected);
                 if (decision.Action != BaselineRecoveryAction.RestoreBeforeAcquire)
                 {
-                    if (decision.Action == BaselineRecoveryAction.RefuseDeviceIdentityMismatch)
+                    if (decision.Action is BaselineRecoveryAction.RefuseDeviceIdentityMismatch or
+                        BaselineRecoveryAction.RefuseInterfaceFingerprintMismatch or
+                        BaselineRecoveryAction.RefuseTransportProfileMismatch)
                     {
-                        await baselineMismatchRecovery.ReportAsync(
-                            persisted,
-                            connected,
+                        // The record belongs to another keyboard or HID interface.
+                        // Abandon it without writing any saved bytes to this device.
+                        await baselineStore.MarkReleasedAsync(
+                            persisted.OwnershipMarker,
                             cancellationToken).ConfigureAwait(false);
-                        descriptorObservation = new LightingDeviceInspection(
-                            connected.DeviceIdentity,
-                            connected.TransportProfile,
-                            connected.InterfaceFingerprint,
-                            LightingDeviceSupport.Writable,
-                            connected.DescriptorMetadata);
                     }
                     else
                     {
-                        await baselineMismatchRecovery.ClearAsync(cancellationToken)
-                            .ConfigureAwait(false);
+                        throw new LightingTransportException(
+                            LightingTransportFailureKind.BaselineMismatch,
+                            decision.Reason);
                     }
-
-                    throw new LightingTransportException(
-                        LightingTransportFailureKind.BaselineMismatch,
-                        decision.Reason);
                 }
-
-                await baselineMismatchRecovery.ClearAsync(cancellationToken).ConfigureAwait(false);
-                InMemoryBaselineOwnershipStore.ValidateSideLight(persisted.SideLightState);
-                UpdateSnapshot(LightingWorkerState.Restoring);
-                await RestoreAndReleaseAsync(persisted, cancellationToken).ConfigureAwait(false);
+                else
+                {
+                    InMemoryBaselineOwnershipStore.ValidateSideLight(persisted.SideLightState);
+                    UpdateSnapshot(LightingWorkerState.Restoring);
+                    await RestoreAndReleaseAsync(persisted, cancellationToken).ConfigureAwait(false);
+                }
             }
 
             // A session becomes visible only after durable recovery state has
@@ -492,9 +547,9 @@ public sealed class HidLightingWorker : IAsyncDisposable
             BaselineOwnership.MarkerPrefix + Guid.NewGuid().ToString("N"),
             IsOwned: true,
             timeProvider.GetUtcNow());
-        // The durable ownership marker is the safety boundary. Never expose an
-        // in-memory baseline (and therefore never write lighting) until it has
-        // been persisted successfully for crash recovery.
+        // The durable restore record is the safety boundary. Never expose an
+        // in-memory baseline (and therefore never write lighting) until the
+        // minimal recovery data has been persisted successfully.
         await baselineStore.SaveAsync(capturedBaseline, cancellationToken).ConfigureAwait(false);
         activeBaseline = capturedBaseline;
     }
@@ -547,8 +602,8 @@ public sealed class HidLightingWorker : IAsyncDisposable
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            // The ownership marker deliberately remains set when physical restore
-            // cannot complete. A future Host start restores it before recapturing.
+            // The restore record deliberately remains when physical restore cannot
+            // complete. A future Host start handles it before accepting Hooks.
             LightingTransportFailureKind failure = exception is LightingTransportException transportException
                 ? transportException.Kind
                 : LightingTransportFailureKind.ProtocolViolation;
@@ -775,8 +830,8 @@ public sealed class HidLightingWorker : IAsyncDisposable
         catch (LightingTransportException)
         {
             // A failed/disappeared device can make close diagnostics fail too.
-            // The logical session is still dropped and the ownership marker is
-            // deliberately preserved for recovery.
+            // The logical session is still dropped and the durable restore record
+            // is deliberately preserved for recovery.
         }
         finally
         {
@@ -856,7 +911,6 @@ public sealed class HidLightingWorker : IAsyncDisposable
             currentSession is not null
                 ? LightingDeviceSupport.Writable
                 : currentDescriptor?.Support,
-            baselineMismatchRecovery.Current,
             currentSession?.DescriptorMetadata ?? currentDescriptor?.DescriptorMetadata);
     }
 
@@ -891,12 +945,11 @@ public sealed class HidLightingWorker : IAsyncDisposable
 
     private sealed record ProbeCommand : WorkerCommand;
 
-    private sealed record AbandonMismatchedBaselineCommand(
-        string ConfirmationId,
-        bool Confirmed) : WorkerCommand
-    {
-        public BaselineMismatchRecoveryResult? Result { get; set; }
-    }
+    private sealed record RefreshDesiredStateCommand : WorkerCommand;
+
+    private sealed record PulseCurrentStateCommand : WorkerCommand;
+
+    private sealed record RecoverPendingRestoreCommand : WorkerCommand;
 
     private sealed record RetryCommand(int Generation) : WorkerCommand;
 

@@ -3,8 +3,9 @@ using AgentKick75.Core.Hooks;
 namespace AgentKick75.Core.State;
 
 /// <summary>
-/// Reduces normalized Codex hooks into per-(session, turn) state and a shared
-/// visual state. All public operations are thread-safe.
+/// Reduces Codex lifecycle events into one state per session and then selects
+/// the highest-priority state for the shared side lights. All operations are
+/// thread-safe.
 /// </summary>
 public sealed class TaskStateReducer
 {
@@ -14,7 +15,8 @@ public sealed class TaskStateReducer
     private const string RequestUserInputToolName = "request_user_input";
 
     private readonly object syncRoot = new();
-    private readonly Dictionary<TaskStateKey, MutableTaskState> turns = [];
+    private readonly Dictionary<string, MutableSessionState> sessions =
+        new(StringComparer.Ordinal);
     private readonly TimeProvider timeProvider;
     private TimeSpan completeTtl;
     private DateTimeOffset? lastEventAtUtc;
@@ -60,10 +62,9 @@ public sealed class TaskStateReducer
             }
 
             lastEventAtUtc = now;
-
             if (hookEvent.Kind == CodexHookEventKind.SessionEnd)
             {
-                RemoveSession(hookEvent.SessionId);
+                sessions.Remove(hookEvent.SessionId);
                 return CreateSnapshot();
             }
 
@@ -72,39 +73,65 @@ public sealed class TaskStateReducer
                 return CreateSnapshot();
             }
 
-            var key = new TaskStateKey(hookEvent.SessionId, hookEvent.TurnId);
+            sessions.TryGetValue(hookEvent.SessionId, out MutableSessionState? session);
             switch (hookEvent.Kind)
             {
                 case CodexHookEventKind.UserPromptSubmit:
-                    ReplaceState(key, TaskVisualState.Thinking, now);
+                    session = GetOrCreateSession(hookEvent.SessionId, hookEvent.TurnId, now);
+                    session.Transition(hookEvent.TurnId, TaskVisualState.Thinking, now);
                     break;
-                case CodexHookEventKind.PreToolUse:
-                    if (string.Equals(
+
+                case CodexHookEventKind.PreToolUse
+                    when string.Equals(
                         hookEvent.ToolName,
                         RequestUserInputToolName,
-                        StringComparison.Ordinal))
+                        StringComparison.Ordinal):
+                    if (session?.State == TaskVisualState.Interrupted)
                     {
-                        TrackRequestUserInput(key, hookEvent.ToolUseId, now);
+                        break;
+                    }
+
+                    session = GetOrCreateSession(hookEvent.SessionId, hookEvent.TurnId, now);
+                    session.RequireInput(hookEvent.TurnId, hookEvent.ToolName!, now);
+                    break;
+
+                case CodexHookEventKind.PermissionRequest:
+                    if (session?.State == TaskVisualState.Interrupted)
+                    {
+                        break;
+                    }
+
+                    session = GetOrCreateSession(hookEvent.SessionId, hookEvent.TurnId, now);
+                    session.RequireInput(hookEvent.TurnId, hookEvent.ToolName!, now);
+                    break;
+
+                case CodexHookEventKind.PostToolUse:
+                    if (session is not null
+                        && !session.IsTerminal
+                        && session.CanResumeFrom(hookEvent.ToolName))
+                    {
+                        session.Transition(hookEvent.TurnId, TaskVisualState.Thinking, now);
                     }
 
                     break;
-                case CodexHookEventKind.PermissionRequest:
-                    TrackUncorrelatedPermissionRequest(key, now);
+
+                case CodexHookEventKind.GoalBlocked:
+                    session = GetOrCreateSession(hookEvent.SessionId, hookEvent.TurnId, now);
+                    session.Transition(hookEvent.TurnId, TaskVisualState.Interrupted, now);
                     break;
-                case CodexHookEventKind.PostToolUse:
-                    ApplyPostToolUse(key, hookEvent.ToolUseId, now);
-                    break;
+
                 case CodexHookEventKind.Stop:
-                    // Codex lifecycle hooks can report different turn_id values
-                    // within one top-level response. Stop ends that response, so
-                    // clear any earlier Thinking/RequiresInput entry for the same
-                    // session before holding Complete.
-                    RemoveSession(hookEvent.SessionId);
-                    ReplaceState(key, TaskVisualState.Complete, now);
+                    if (session?.State is TaskVisualState.RequiresInput or TaskVisualState.Interrupted)
+                    {
+                        break;
+                    }
+
+                    session = GetOrCreateSession(hookEvent.SessionId, hookEvent.TurnId, now);
+                    session.Transition(hookEvent.TurnId, TaskVisualState.Complete, now);
                     break;
+
+                case CodexHookEventKind.PreToolUse:
                 case CodexHookEventKind.SessionEnd:
-                    // Handled above because this event has no turn_id.
-                    break;
                 default:
                     break;
             }
@@ -113,10 +140,6 @@ public sealed class TaskStateReducer
         }
     }
 
-    /// <summary>
-    /// Returns a current snapshot after applying complete TTL and stale cleanup.
-    /// Calling this periodically is sufficient to drive expiry without a dedicated timer.
-    /// </summary>
     public TaskStateSnapshot Snapshot()
     {
         lock (syncRoot)
@@ -126,19 +149,11 @@ public sealed class TaskStateReducer
         }
     }
 
-    /// <summary>
-    /// Explicit cleanup entry point for a host timer.
-    /// </summary>
     public TaskStateSnapshot CleanupStale()
     {
         return Snapshot();
     }
 
-    /// <summary>
-    /// Applies a new Complete hold duration to both existing and future turns.
-    /// Existing Complete turns are expired immediately when their elapsed age
-    /// already exceeds the new duration.
-    /// </summary>
     public TaskStateSnapshot UpdateCompleteTtl(TimeSpan value)
     {
         ValidatePositiveDuration(value, nameof(value));
@@ -155,7 +170,7 @@ public sealed class TaskStateReducer
     {
         lock (syncRoot)
         {
-            turns.Clear();
+            sessions.Clear();
             return CreateSnapshot();
         }
     }
@@ -168,164 +183,113 @@ public sealed class TaskStateReducer
         }
     }
 
-    private void ReplaceState(TaskStateKey key, TaskVisualState state, DateTimeOffset now)
-    {
-        turns[key] = new MutableTaskState(
-            state,
-            now,
-            state == TaskVisualState.Complete ? now : null);
-    }
-
-    private void TrackRequestUserInput(
-        TaskStateKey key,
-        string? toolUseId,
+    private MutableSessionState GetOrCreateSession(
+        string sessionId,
+        string turnId,
         DateTimeOffset now)
     {
-        MutableTaskState task = GetOrCreateTask(key, now);
-        if (toolUseId is null)
+        if (!sessions.TryGetValue(sessionId, out MutableSessionState? session))
         {
-            // Older hook fixtures did not carry tool_use_id. Keep their former
-            // one-wait behavior, but never let that legacy latch clear a modern,
-            // explicitly correlated request_user_input call.
-            task.HasUncorrelatedRequiresInput = true;
-        }
-        else
-        {
-            task.PendingUserInputToolUseIds.Add(toolUseId);
+            session = new MutableSessionState(turnId, now);
+            sessions.Add(sessionId, session);
         }
 
-        UpdateTask(task, TaskVisualState.RequiresInput, now);
-    }
-
-    private void TrackUncorrelatedPermissionRequest(TaskStateKey key, DateTimeOffset now)
-    {
-        MutableTaskState task = GetOrCreateTask(key, now);
-
-        // Codex PermissionRequest stdin currently has no tool_use_id. Do not
-        // guess an identity from tool name or arrival order: equal-named tools
-        // can run concurrently and a denied call may never emit PostToolUse.
-        task.HasUncorrelatedRequiresInput = true;
-        UpdateTask(task, TaskVisualState.RequiresInput, now);
-    }
-
-    private void ApplyPostToolUse(
-        TaskStateKey key,
-        string? toolUseId,
-        DateTimeOffset now)
-    {
-        if (!turns.TryGetValue(key, out MutableTaskState? task))
-        {
-            ReplaceState(key, TaskVisualState.Thinking, now);
-            return;
-        }
-
-        if (toolUseId is not null)
-        {
-            task.PendingUserInputToolUseIds.Remove(toolUseId);
-        }
-
-        // Preserve the documented legacy PermissionRequest transition without
-        // pretending that an uncorrelated approval can be paired exactly. A
-        // non-matching PostToolUse can clear this legacy latch, but it cannot
-        // clear any request_user_input call that has an explicit tool_use_id.
-        task.HasUncorrelatedRequiresInput = false;
-        TaskVisualState state = task.PendingUserInputToolUseIds.Count > 0
-            ? TaskVisualState.RequiresInput
-            : TaskVisualState.Thinking;
-        UpdateTask(task, state, now);
-    }
-
-    private MutableTaskState GetOrCreateTask(TaskStateKey key, DateTimeOffset now)
-    {
-        if (!turns.TryGetValue(key, out MutableTaskState? task))
-        {
-            task = new MutableTaskState(TaskVisualState.Thinking, now, null);
-            turns.Add(key, task);
-        }
-
-        return task;
-    }
-
-    private static void UpdateTask(
-        MutableTaskState task,
-        TaskVisualState state,
-        DateTimeOffset now)
-    {
-        task.State = state;
-        task.LastUpdatedAtUtc = now;
-        task.CompletedAtUtc = state == TaskVisualState.Complete ? now : null;
-    }
-
-    private void RemoveSession(string sessionId)
-    {
-        foreach (TaskStateKey key in turns.Keys
-                     .Where(key => string.Equals(key.SessionId, sessionId, StringComparison.Ordinal))
-                     .ToArray())
-        {
-            turns.Remove(key);
-        }
+        return session;
     }
 
     private void RemoveExpired(DateTimeOffset now)
     {
-        foreach ((TaskStateKey key, MutableTaskState task) in turns.ToArray())
+        foreach ((string sessionId, MutableSessionState session) in sessions.ToArray())
         {
-            TimeSpan staleAge = now - task.LastUpdatedAtUtc;
-            bool isStale = staleAge >= StaleTimeout;
-
-            bool isCompleteExpired = task.CompletedAtUtc is { } completedAtUtc
-                && now - completedAtUtc >= completeTtl;
-
-            if ((staleAge >= TimeSpan.Zero && isStale)
-                || (task.CompletedAtUtc is not null && isCompleteExpired))
+            TimeSpan age = now - session.LastUpdatedAtUtc;
+            if (age < TimeSpan.Zero || session.State == TaskVisualState.Interrupted)
             {
-                turns.Remove(key);
+                continue;
+            }
+
+            TimeSpan lifetime = session.State == TaskVisualState.Complete
+                ? completeTtl
+                : StaleTimeout;
+            if (age >= lifetime)
+            {
+                sessions.Remove(sessionId);
             }
         }
     }
 
     private TaskStateSnapshot CreateSnapshot()
     {
-        TaskStateEntry[] entries = turns
-            .OrderBy(pair => pair.Key.SessionId, StringComparer.Ordinal)
-            .ThenBy(pair => pair.Key.TurnId, StringComparer.Ordinal)
-            .Select(pair => new TaskStateEntry(
+        SessionStateEntry[] entries = sessions
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => new SessionStateEntry(
                 pair.Key,
+                pair.Value.TurnId,
                 pair.Value.State,
-                pair.Value.LastUpdatedAtUtc,
-                pair.Value.CompletedAtUtc))
+                pair.Value.LastUpdatedAtUtc))
             .ToArray();
 
         TaskVisualState aggregateState = entries.Length == 0
             ? TaskVisualState.Idle
-            : entries.Max(entry => entry.State);
-
-        int sessionCount = entries
-            .Select(entry => entry.Key.SessionId)
-            .Distinct(StringComparer.Ordinal)
-            .Count();
+            : entries.MaxBy(entry => Priority(entry.State))!.State;
+        int activeSessionCount = entries.Count(
+            entry => entry.State != TaskVisualState.Complete);
 
         return new TaskStateSnapshot(
             aggregateState,
-            entries.Length,
-            sessionCount,
+            activeSessionCount,
             lastEventAtUtc,
             Array.AsReadOnly(entries));
     }
 
-    private sealed class MutableTaskState(
-        TaskVisualState state,
-        DateTimeOffset lastUpdatedAtUtc,
-        DateTimeOffset? completedAtUtc)
+    private static int Priority(TaskVisualState state)
     {
-        public TaskVisualState State { get; set; } = state;
+        return state switch
+        {
+            TaskVisualState.Idle => 0,
+            TaskVisualState.Complete => 1,
+            TaskVisualState.Thinking => 2,
+            TaskVisualState.Interrupted => 3,
+            TaskVisualState.RequiresInput => 4,
+            _ => throw new ArgumentOutOfRangeException(nameof(state)),
+        };
+    }
 
-        public DateTimeOffset LastUpdatedAtUtc { get; set; } = lastUpdatedAtUtc;
+    private sealed class MutableSessionState(string turnId, DateTimeOffset now)
+    {
+        public string TurnId { get; private set; } = turnId;
 
-        public DateTimeOffset? CompletedAtUtc { get; set; } = completedAtUtc;
+        public TaskVisualState State { get; private set; } = TaskVisualState.Thinking;
 
-        public HashSet<string> PendingUserInputToolUseIds { get; } = new(StringComparer.Ordinal);
+        public DateTimeOffset LastUpdatedAtUtc { get; private set; } = now;
 
-        public bool HasUncorrelatedRequiresInput { get; set; }
+        private string? WaitingToolName { get; set; }
+
+        public bool IsTerminal => State is TaskVisualState.Complete or TaskVisualState.Interrupted;
+
+        public bool CanResumeFrom(string? toolName)
+        {
+            return State != TaskVisualState.RequiresInput
+                || string.Equals(WaitingToolName, toolName, StringComparison.Ordinal);
+        }
+
+        public void RequireInput(
+            string nextTurnId,
+            string toolName,
+            DateTimeOffset updatedAtUtc)
+        {
+            Transition(nextTurnId, TaskVisualState.RequiresInput, updatedAtUtc);
+            WaitingToolName = toolName;
+        }
+
+        public void Transition(
+            string nextTurnId,
+            TaskVisualState state,
+            DateTimeOffset updatedAtUtc)
+        {
+            TurnId = nextTurnId;
+            State = state;
+            LastUpdatedAtUtc = updatedAtUtc;
+            WaitingToolName = null;
+        }
     }
 }

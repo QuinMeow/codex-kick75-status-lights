@@ -11,8 +11,6 @@ public sealed class WindowsLightingTransportTests
 
     [Theory]
     [InlineData(0x1026, "kick75-usb", LightingDeviceSupport.Writable)]
-    [InlineData(0x2620, "kick75-u1-dongle", LightingDeviceSupport.DiagnosticOnly)]
-    [InlineData(0x1027, "kick75-high-diagnostic", LightingDeviceSupport.DiagnosticOnly)]
     public async Task InspectAsync_StrictDescriptor_ReturnsMetadataWithoutOpeningProtocolConnection(
         int productId,
         string expectedProfile,
@@ -145,35 +143,13 @@ public sealed class WindowsLightingTransportTests
             new HidDeviceSelector(),
             factory);
 
-        LightingDeviceSession session = await transport.ConnectAsync(LightingConnectionRequest.Auto);
+        LightingDeviceSession session = await transport.ConnectAsync(LightingConnectionRequest.Usb);
 
         Assert.Equal(usb.DeviceIdentity, session.DeviceIdentity);
         Assert.Equal(usb.InterfaceFingerprint, session.InterfaceFingerprint);
         Assert.Equal("Kick75 IO", session.DescriptorMetadata?.Product);
         Assert.Equal("NuPhy", session.DescriptorMetadata?.Manufacturer);
         Assert.Equal((ushort)0x0418, session.DescriptorMetadata?.HidDescriptorVersionNumber);
-    }
-
-    [Fact]
-    public async Task ConnectAsync_RequiredDongleProfile_IsDiagnosticOnlyAndNeverOpened()
-    {
-        HidInterfaceDescriptor dongle = Device(0x2620);
-        var factory = new CapturingConnectionFactory();
-        await using var transport = new WindowsLightingTransport(
-            new SingleDeviceEnumerator(dongle),
-            new HidDeviceSelector(),
-            factory);
-
-        LightingTransportException exception = await Assert.ThrowsAsync<LightingTransportException>(
-            async () =>
-            {
-                _ = await transport.ConnectAsync(
-                    LightingConnectionRequest.ForOwnedBaseline("kick75-u1-dongle"));
-            });
-
-        Assert.Equal(LightingTransportFailureKind.ProtocolViolation, exception.Kind);
-        Assert.Equal(0, factory.OpenCount);
-        Assert.Contains("diagnostic", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -211,7 +187,7 @@ public sealed class WindowsLightingTransportTests
         LightingTransportException exception = await Assert.ThrowsAsync<LightingTransportException>(
             async () =>
             {
-                _ = await transport.ConnectAsync(LightingConnectionRequest.Auto);
+                _ = await transport.ConnectAsync(LightingConnectionRequest.Usb);
             });
 
         Assert.Equal(LightingTransportFailureKind.ProtocolViolation, exception.Kind);
@@ -236,7 +212,7 @@ public sealed class WindowsLightingTransportTests
         LightingTransportException exception = await Assert.ThrowsAsync<LightingTransportException>(
             async () =>
             {
-                _ = await transport.ConnectAsync(LightingConnectionRequest.Auto);
+                _ = await transport.ConnectAsync(LightingConnectionRequest.Usb);
             });
         var reconnectPolicy = new LayeredReconnectPolicy();
 
@@ -260,7 +236,7 @@ public sealed class WindowsLightingTransportTests
         LightingTransportException exception = await Assert.ThrowsAsync<LightingTransportException>(
             async () =>
             {
-                _ = await transport.ConnectAsync(LightingConnectionRequest.Auto);
+                _ = await transport.ConnectAsync(LightingConnectionRequest.Usb);
             });
 
         Assert.Equal(LightingTransportFailureKind.ProtocolViolation, exception.Kind);
@@ -282,7 +258,7 @@ public sealed class WindowsLightingTransportTests
         LightingTransportException exception = await Assert.ThrowsAsync<LightingTransportException>(
             async () =>
             {
-                _ = await transport.ConnectAsync(LightingConnectionRequest.Auto);
+                _ = await transport.ConnectAsync(LightingConnectionRequest.Usb);
             });
 
         Assert.Equal(LightingTransportFailureKind.ProtocolViolation, exception.Kind);
@@ -299,7 +275,7 @@ public sealed class WindowsLightingTransportTests
             new SingleDeviceEnumerator(usb),
             new HidDeviceSelector(),
             factory);
-        _ = await transport.ConnectAsync(LightingConnectionRequest.Auto);
+        _ = await transport.ConnectAsync(LightingConnectionRequest.Usb);
         ValidHandshakeConnection connection = Assert.IsType<ValidHandshakeConnection>(
             factory.Connection);
         connection.WrittenFrames.Clear();
@@ -502,38 +478,12 @@ public sealed class WindowsLightingTransportTests
         }
     }
 
-    private sealed class TimeoutHandshakeConnection(HidInterfaceDescriptor device) : IHidReportConnection
-    {
-        public HidInterfaceDescriptor Device { get; } = device;
-
-        public HidDeviceState State { get; } = HidDeviceState.ReceiverPresent;
-
-        public ValueTask WriteReportAsync(
-            ReadOnlyMemory<byte> protocolFrame,
-            TimeSpan timeout,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Assert.Equal((byte)Kick75ProtocolCommand.SetSecretKey, protocolFrame.Span[1]);
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask<byte[]> ReadReportAsync(
-            TimeSpan timeout,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromException<byte[]>(new TimeoutException("Simulated sleeping keyboard."));
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
     private sealed class InvalidHandshakeConnection : IHidReportConnection
     {
         public InvalidHandshakeConnection(HidInterfaceDescriptor device)
         {
             Device = device;
-            State = device.ProductId == HidTransportProfiles.Kick75U1Dongle.ProductId
-                ? HidDeviceState.ReceiverPresent
-                : HidDeviceState.Present;
+            State = HidDeviceState.Present;
         }
 
         public HidInterfaceDescriptor Device { get; }

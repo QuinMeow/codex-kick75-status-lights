@@ -4,6 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>AgentKick75</AssemblyName>
+    <ApplicationIcon>Assets\AgentKick75.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

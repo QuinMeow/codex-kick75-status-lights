@@ -8,22 +8,16 @@ public enum AppCommandKind
 {
     Host,
     Status,
+    Install,
+    Uninstall,
     HardwareTest,
     Help,
     Invalid,
 }
 
-public enum HardwareTransportChoice
-{
-    Auto,
-    Usb,
-    Dongle,
-}
-
 public sealed record HardwareTestArguments
 {
     public HardwareTestArguments(
-        HardwareTransportChoice transport,
         int cycles = 1,
         TimeSpan? greenDuration = null)
     {
@@ -38,12 +32,9 @@ public sealed record HardwareTestArguments
             throw new ArgumentOutOfRangeException(nameof(greenDuration));
         }
 
-        Transport = transport;
         Cycles = cycles;
         GreenDuration = effectiveDuration;
     }
-
-    public HardwareTransportChoice Transport { get; }
 
     public int Cycles { get; }
 
@@ -70,6 +61,16 @@ public static class CommandLine
             return new(AppCommandKind.Status);
         }
 
+        if (arguments.Count == 1 && arguments[0] is "install")
+        {
+            return new(AppCommandKind.Install);
+        }
+
+        if (arguments.Count == 1 && arguments[0] is "uninstall")
+        {
+            return new(AppCommandKind.Uninstall);
+        }
+
         if (arguments.Count == 1 && arguments[0] is "--help" or "-h" or "help")
         {
             return new(AppCommandKind.Help);
@@ -84,14 +85,13 @@ public static class CommandLine
     }
 
     public static string Usage =>
-        $"AgentKick75 [status | hardware-test --transport auto|usb|dongle " +
+        $"AgentKick75 [status | install | uninstall | hardware-test " +
         $"[--cycles 1..100] [--green-seconds 0..60]]{Environment.NewLine}" +
         "The command reads the current side-light state, previews green, and restores it. " +
-        "USB is currently the only writable profile; dongle remains diagnostic-only and write-blocked.";
+        "Only the USB transport is supported.";
 
     private static ParsedCommand ParseHardwareTest(IReadOnlyList<string> arguments)
     {
-        HardwareTransportChoice? transport = null;
         int cycles = 1;
         bool cyclesSpecified = false;
         TimeSpan greenDuration = TimeSpan.FromSeconds(5);
@@ -100,17 +100,6 @@ public static class CommandLine
         for (int index = 1; index < arguments.Count; index++)
         {
             string argument = arguments[index];
-            if (argument == "--transport" && index + 1 < arguments.Count)
-            {
-                if (transport is not null || !TryParseTransport(arguments[++index], out HardwareTransportChoice parsed))
-                {
-                    return new(AppCommandKind.Invalid, Error: "Invalid or duplicate --transport value.");
-                }
-
-                transport = parsed;
-                continue;
-            }
-
             if (argument == "--cycles" && index + 1 < arguments.Count)
             {
                 if (cyclesSpecified ||
@@ -146,26 +135,8 @@ public static class CommandLine
             return new(AppCommandKind.Invalid, Error: $"Unknown hardware-test option: {argument}");
         }
 
-        if (transport is null)
-        {
-            return new(AppCommandKind.Invalid, Error: "hardware-test requires --transport auto|usb|dongle.");
-        }
-
         return new(
             AppCommandKind.HardwareTest,
-            new HardwareTestArguments(transport.Value, cycles, greenDuration));
-    }
-
-    private static bool TryParseTransport(string value, out HardwareTransportChoice transport)
-    {
-        transport = value switch
-        {
-            "auto" => HardwareTransportChoice.Auto,
-            "usb" => HardwareTransportChoice.Usb,
-            "dongle" => HardwareTransportChoice.Dongle,
-            _ => default,
-        };
-
-        return value is "auto" or "usb" or "dongle";
+            new HardwareTestArguments(cycles, greenDuration));
     }
 }

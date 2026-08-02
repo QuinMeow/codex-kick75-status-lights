@@ -1,18 +1,10 @@
 // SPDX-License-Identifier: MIT
 namespace AgentKick75.Hid.Windows;
 
-public enum HidTransportPreference
-{
-    Auto,
-    Usb,
-    Dongle,
-}
-
 public enum HidDeviceState
 {
     Disconnected,
     Present,
-    ReceiverPresent,
     Ready,
     Busy,
     Unresponsive,
@@ -90,7 +82,6 @@ public sealed record HidCandidateDiagnostic(
     string Reason);
 
 public sealed record HidDeviceSelection(
-    HidTransportPreference Preference,
     HidInterfaceDescriptor? Device,
     HidTransportProfile? Profile,
     HidDeviceState State,
@@ -100,5 +91,5 @@ public sealed record HidDeviceSelection(
     public bool IsWritable =>
         Device is not null &&
         Profile is { Support: HidProfileSupport.Writable } &&
-        State is HidDeviceState.Present or HidDeviceState.ReceiverPresent;
+        State == HidDeviceState.Present;
 }

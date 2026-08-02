@@ -35,7 +35,10 @@ public sealed class HostRuntimeStartupRecoveryTests
             IsOwned: true,
             DateTimeOffset.Parse("2026-07-31T00:00:00Z")));
         var worker = new HidLightingWorker(transport, ownershipStore);
-        var coordinator = new HostCoordinator(new TaskStateReducer(), worker);
+        var coordinator = new HostCoordinator(
+            new TaskStateReducer(),
+            worker,
+            initialLifecycleState: ApplicationLifecycleState.Starting);
         var runtime = new HostRuntime(
             worker,
             coordinator,
@@ -57,6 +60,9 @@ public sealed class HostRuntimeStartupRecoveryTests
                 session.TransportProfile,
                 Assert.Single(transport.ConnectionRequests).RequiredTransportProfileId);
             Assert.Equal(TaskVisualState.Idle, coordinator.GetStatus().AggregateState);
+            Assert.Equal(
+                ApplicationLifecycleState.Running,
+                coordinator.GetStatus().LifecycleState);
         }
         finally
         {
@@ -64,6 +70,50 @@ public sealed class HostRuntimeStartupRecoveryTests
         }
 
         Assert.Contains("disconnect", transport.Operations);
+    }
+
+    [Fact]
+    public async Task Start_OwnedDifferentDevice_DeletesResponsibilityWithoutWritingSavedBytes()
+    {
+        var observed = new LightingDeviceSession(
+            "observed-device",
+            "kick75-usb",
+            "observed-interface",
+            CurrentMode: 1);
+        var transport = new MockLightingTransport(InterruptedState, observed);
+        var ownershipStore = new InMemoryBaselineOwnershipStore();
+        await ownershipStore.SaveAsync(new BaselineOwnershipRecord(
+            BaselineRecord.CurrentSchemaVersion,
+            "different-device",
+            observed.TransportProfile,
+            observed.InterfaceFingerprint,
+            Baseline,
+            observed.CurrentMode,
+            BaselineOwnership.MarkerPrefix + "different-device",
+            IsOwned: true,
+            DateTimeOffset.Parse("2026-07-31T00:00:00Z")));
+        var worker = new HidLightingWorker(transport, ownershipStore);
+        var coordinator = new HostCoordinator(
+            new TaskStateReducer(),
+            worker,
+            initialLifecycleState: ApplicationLifecycleState.Starting);
+        var runtime = new HostRuntime(
+            worker,
+            coordinator,
+            $"agent-kick75-startup-mismatch-{Guid.NewGuid():N}");
+
+        runtime.Start();
+        try
+        {
+            Assert.Empty(transport.Writes);
+            Assert.False(Assert.IsType<BaselineOwnershipRecord>(
+                await ownershipStore.LoadAsync()).IsOwned);
+            Assert.Equal(ApplicationLifecycleState.Running, coordinator.GetStatus().LifecycleState);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
     }
 
     private static async Task<BaselineOwnershipRecord> WaitForReleasedOwnershipAsync(

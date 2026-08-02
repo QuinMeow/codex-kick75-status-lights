@@ -20,6 +20,7 @@ public static class PipeMessageKinds
     public const string HookEvent = "hook-event";
     public const string StatusRequest = "status-request";
     public const string StatusResponse = "status-response";
+    public const string PrepareUninstallRequest = "prepare-uninstall-request";
     public const string Accepted = "accepted";
     public const string Rejected = "rejected";
 }
@@ -38,11 +39,11 @@ public static class PipeMessageSchema
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (envelope.Kind == PipeMessageKinds.StatusRequest &&
+        if (envelope.Kind is PipeMessageKinds.StatusRequest or PipeMessageKinds.PrepareUninstallRequest &&
             !IsStrictEmptyObject(envelope.Payload))
         {
             throw new PipeProtocolException(
-                "A status-request payload must be an empty JSON object.");
+                "A status or prepare-uninstall request payload must be an empty JSON object.");
         }
     }
 

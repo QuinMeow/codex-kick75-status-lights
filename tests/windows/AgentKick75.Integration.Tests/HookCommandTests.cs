@@ -34,9 +34,8 @@ public sealed class HookCommandTests
         Assert.Equal("session-1", envelope.Payload.GetProperty("sessionId").GetString());
         Assert.Equal("turn-1", envelope.Payload.GetProperty("turnId").GetString());
         Assert.Equal(JsonValueKind.Null, envelope.Payload.GetProperty("toolName").ValueKind);
-        Assert.Equal(JsonValueKind.Null, envelope.Payload.GetProperty("toolUseId").ValueKind);
         Assert.Equal(
-            ["kind", "sessionId", "toolName", "toolUseId", "turnId"],
+            ["kind", "sessionId", "toolName", "turnId"],
             envelope.Payload
                 .EnumerateObject()
                 .Select(property => property.Name)
@@ -46,7 +45,7 @@ public sealed class HookCommandTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_PostToolUse_SendsToolUseIdButNoToolPayload()
+    public async Task ExecuteAsync_PostToolUse_DropsUnusedIdentifiersAndToolPayload()
     {
         const string secret = "private tool response";
         string input = $$"""
@@ -65,9 +64,9 @@ public sealed class HookCommandTests
 
         Assert.Equal(0, exitCode);
         PipeEnvelope envelope = Assert.IsType<PipeEnvelope>(client.Request);
-        Assert.Equal("tool-call-1", envelope.Payload.GetProperty("toolUseId").GetString());
+        Assert.Equal("request_user_input", envelope.Payload.GetProperty("toolName").GetString());
         Assert.Equal(
-            ["kind", "sessionId", "toolName", "toolUseId", "turnId"],
+            ["kind", "sessionId", "toolName", "turnId"],
             envelope.Payload
                 .EnumerateObject()
                 .Select(property => property.Name)
@@ -75,6 +74,30 @@ public sealed class HookCommandTests
                 .ToArray());
         Assert.DoesNotContain(secret, envelope.Payload.GetRawText(), StringComparison.Ordinal);
         Assert.DoesNotContain("tool_response", envelope.Payload.GetRawText(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateGoalBlocked_SendsOnlyGoalBlockedLifecycleEvent()
+    {
+        const string input = """
+            {
+              "hook_event_name": "PostToolUse",
+              "session_id": "session-1",
+              "turn_id": "turn-1",
+              "tool_name": "update_goal",
+              "tool_input": { "status": "blocked", "reason": "private" }
+            }
+            """;
+        var client = new CapturingPipeClient();
+
+        int exitCode = await HookCommand.ExecuteAsync(new StringReader(input), client);
+
+        Assert.Equal(0, exitCode);
+        PipeEnvelope envelope = Assert.IsType<PipeEnvelope>(client.Request);
+        Assert.Equal((int)CodexHookEventKind.GoalBlocked, envelope.Payload.GetProperty("kind").GetInt32());
+        Assert.Equal(JsonValueKind.Null, envelope.Payload.GetProperty("toolName").ValueKind);
+        Assert.DoesNotContain("blocked", envelope.Payload.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("private", envelope.Payload.GetRawText(), StringComparison.Ordinal);
     }
 
     [Fact]

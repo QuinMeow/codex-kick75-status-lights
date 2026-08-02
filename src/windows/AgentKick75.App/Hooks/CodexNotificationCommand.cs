@@ -58,7 +58,6 @@ public static class CodexNotificationCommand
             sessionId,
             turnId,
             toolName = (string?)null,
-            toolUseId = (string?)null,
         });
         return true;
     }

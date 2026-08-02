@@ -28,15 +28,18 @@ public sealed class NullHostSettingsPersistence : IHostSettingsPersistence
 public sealed class CoreHostSettingsPersistence : IHostSettingsPersistence
 {
     private readonly ConfigurationStore store;
+    private readonly Action<bool>? setStartupEnabled;
     private readonly SemaphoreSlim gate = new(1, 1);
     private AgentKick75Configuration current;
 
     public CoreHostSettingsPersistence(
         ConfigurationStore store,
-        AgentKick75Configuration current)
+        AgentKick75Configuration current,
+        Action<bool>? setStartupEnabled = null)
     {
         this.store = store ?? throw new ArgumentNullException(nameof(store));
         this.current = current ?? throw new ArgumentNullException(nameof(current));
+        this.setStartupEnabled = setStartupEnabled;
     }
 
     public async ValueTask SaveAsync(
@@ -53,8 +56,26 @@ public sealed class CoreHostSettingsPersistence : IHostSettingsPersistence
                 current.StaleSessionTtl,
                 startAtLogin,
                 current.SchemaVersion);
-            await store.SaveAsync(updated, cancellationToken).ConfigureAwait(false);
-            current = updated;
+            bool startupChanged = current.StartAtLogin != startAtLogin;
+            if (startupChanged)
+            {
+                setStartupEnabled?.Invoke(startAtLogin);
+            }
+
+            try
+            {
+                await store.SaveAsync(updated, cancellationToken).ConfigureAwait(false);
+                current = updated;
+            }
+            catch
+            {
+                if (startupChanged)
+                {
+                    setStartupEnabled?.Invoke(current.StartAtLogin);
+                }
+
+                throw;
+            }
         }
         finally
         {

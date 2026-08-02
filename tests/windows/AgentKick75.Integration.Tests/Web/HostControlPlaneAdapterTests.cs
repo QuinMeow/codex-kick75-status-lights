@@ -246,18 +246,6 @@ public sealed class HostControlPlaneAdapterTests
         "NotApplicable",
         "USB allowlisted; descriptor observed",
         "NuPhy Kick75 IO")]
-    [InlineData(
-        "kick75-u1-dongle",
-        LightingDeviceSupport.DiagnosticOnly,
-        "Present",
-        "DiagnosticOnly",
-        "NuPhy Kick75 U1 Receiver")]
-    [InlineData(
-        "kick75-high-diagnostic",
-        LightingDeviceSupport.DiagnosticOnly,
-        "NotApplicable",
-        "DiagnosticOnly",
-        "NuPhy Kick75 High")]
     public async Task GetStatusAsync_StrictDescriptorObservation_IsReachableWithoutConnectOrWrite(
         string transportProfile,
         LightingDeviceSupport support,
@@ -308,8 +296,6 @@ public sealed class HostControlPlaneAdapterTests
 
     [Theory]
     [InlineData("kick75-usb", LightingDeviceSupport.Writable, "Kick75 USB HID device")]
-    [InlineData("kick75-u1-dongle", LightingDeviceSupport.DiagnosticOnly, "Kick75 U1 receiver")]
-    [InlineData("kick75-high-diagnostic", LightingDeviceSupport.DiagnosticOnly, "Kick75 High HID device")]
     public async Task GetStatusAsync_MissingDescriptorNames_UsesProfileSpecificFallback(
         string transportProfile,
         LightingDeviceSupport support,

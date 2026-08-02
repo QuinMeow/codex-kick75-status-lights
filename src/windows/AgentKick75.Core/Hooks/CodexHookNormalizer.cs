@@ -13,6 +13,8 @@ public sealed class CodexHookNormalizer
     public const int MaxIdentifierLength = 256;
 
     private const string RequestUserInputToolName = "request_user_input";
+    private const string UpdateGoalToolName = "update_goal";
+    private const string BlockedGoalStatus = "blocked";
 
     public CodexHookNormalizer(int maxInputBytes = DefaultMaxInputBytes)
     {
@@ -111,11 +113,22 @@ public sealed class CodexHookNormalizer
         string? sessionId = null;
         string? turnId = null;
         string? toolName = null;
-        string? toolUseId = null;
+        JsonElement? goalToolInput = null;
         var seenAllowedProperties = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (JsonProperty property in root.EnumerateObject())
         {
+            if (string.Equals(property.Name, "tool_input", StringComparison.Ordinal))
+            {
+                if (!seenAllowedProperties.Add(property.Name))
+                {
+                    return null;
+                }
+
+                goalToolInput = property.Value;
+                continue;
+            }
+
             if (!IsAllowedProperty(property.Name))
             {
                 continue;
@@ -147,9 +160,6 @@ public sealed class CodexHookNormalizer
                 case "tool_name":
                     toolName = value;
                     break;
-                case "tool_use_id":
-                    toolUseId = value;
-                    break;
             }
         }
 
@@ -168,22 +178,55 @@ public sealed class CodexHookNormalizer
             return null;
         }
 
-        bool isToolEvent = kind is CodexHookEventKind.PreToolUse
+        if (kind == CodexHookEventKind.PostToolUse
+            && string.Equals(toolName, UpdateGoalToolName, StringComparison.Ordinal)
+            && goalToolInput is { } toolInput
+            && string.Equals(ReadGoalStatus(toolInput), BlockedGoalStatus, StringComparison.Ordinal))
+        {
+            return new CodexHookEvent(CodexHookEventKind.GoalBlocked, sessionId, turnId);
+        }
+
+        bool needsToolName = kind is CodexHookEventKind.PreToolUse
             or CodexHookEventKind.PermissionRequest
             or CodexHookEventKind.PostToolUse;
-        if (isToolEvent && toolName is null)
+        if (needsToolName && toolName is null)
         {
             return null;
         }
 
-        bool hasCorrelatableToolUse = kind is CodexHookEventKind.PreToolUse
-            or CodexHookEventKind.PostToolUse;
         return new CodexHookEvent(
             kind,
             sessionId,
             turnId,
-            isToolEvent ? toolName : null,
-            hasCorrelatableToolUse ? toolUseId : null);
+            needsToolName ? toolName : null);
+    }
+
+    private static string? ReadGoalStatus(JsonElement toolInput)
+    {
+        if (toolInput.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        string? status = null;
+        bool statusSeen = false;
+        foreach (JsonProperty property in toolInput.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, "status", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (statusSeen || property.Value.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            statusSeen = true;
+            status = property.Value.GetString();
+        }
+
+        return status;
     }
 
     private static bool IsAllowedProperty(string propertyName)
@@ -191,8 +234,7 @@ public sealed class CodexHookNormalizer
         return propertyName is "hook_event_name"
             or "session_id"
             or "turn_id"
-            or "tool_name"
-            or "tool_use_id";
+            or "tool_name";
     }
 
     private static bool IsValidField(string? value)

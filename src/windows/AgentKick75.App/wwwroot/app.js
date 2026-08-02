@@ -8,15 +8,9 @@
   const pauseButton = document.getElementById("pause-button");
   const saveButton = document.getElementById("save-settings");
   const installHooksButton = document.getElementById("install-hooks-button");
-  const hardwareTestButton = document.getElementById("hardware-test-button");
-  const hardwareTestEnabled = document.getElementById("hardware-test-enabled");
   const sessionDiagnosticsEnabled = document.getElementById("session-diagnostics-enabled");
   const savedDiagnosticsEnabled = document.getElementById("saved-diagnostics-enabled");
-  const baselineRecovery = document.getElementById("baseline-recovery");
-  const baselineRecoveryConfirmation = document.getElementById("baseline-recovery-confirmation");
-  const baselineRecoveryButton = document.getElementById("baseline-recovery-button");
   let currentStatus = null;
-  let currentBaselineRecovery = null;
   let noticeTimer = null;
   let statusRefreshTimer = null;
 
@@ -25,7 +19,8 @@
     thinking: "思考中",
     requiresinput: "等待输入",
     "requires-input": "等待输入",
-    complete: "已完成"
+    complete: "已完成",
+    interrupted: "已中断"
   };
 
   const valueLabels = {
@@ -40,6 +35,7 @@
     SleepingOrUnresponsive: "休眠或无响应",
     InvalidResponse: "响应无效",
     DiagnosticOnly: "仅诊断",
+    Unsupported: "不支持",
     Enabled: "已启用",
     Disabled: "已禁用",
     Unconfirmed: "未确认",
@@ -50,11 +46,11 @@
   const deviceModelLabels = {
     "Unknown HID device": "未知 HID 设备",
     "Kick75 USB HID device": "Kick75 USB HID 设备",
-    "Kick75 U1 receiver": "Kick75 U1 接收器",
-    "Kick75 High HID device": "Kick75 High HID 设备"
+    "Kick75 U1 receiver": "不支持的 U1 接收器",
+    "Kick75 High HID device": "不支持的 Kick75 High HID 设备"
   };
 
-  const sessionDiagnosticStates = new Set(["thinking", "requiresinput", "complete"]);
+  const sessionDiagnosticStates = new Set(["thinking", "requiresinput", "complete", "interrupted"]);
 
   function setText(id, value) {
     document.getElementById(id).textContent = value ?? "—";
@@ -153,8 +149,10 @@
 
   function renderStatus(status) {
     currentStatus = status;
-    const stateKey = status.isPaused ? "paused" : canonicalState(status.aggregateState);
-    const stateLabel = status.isPaused ? "已暂停" : displayState(status.aggregateState);
+    const isPaused = status.lifecycleState === "Paused";
+    const isRunning = status.lifecycleState === "Running";
+    const stateKey = isPaused ? "paused" : canonicalState(status.aggregateState);
+    const stateLabel = isPaused ? "已暂停" : displayState(status.aggregateState);
 
     const stateClass = stateKey === "requiresinput" ? "requires-input" : stateKey;
     stateBanner.className = `state-display state-${stateClass}`;
@@ -162,7 +160,9 @@
     setText("aggregate-state", stateLabel);
     setText("active-sessions", String(status.activeSessionCount ?? 0));
     setText("last-event", formatTime(status.lastEventAt));
-    setText("host-mode", status.isPaused
+    setText("host-mode", status.lifecycleState === "Faulted"
+      ? `灯光接管已停止（${status.faultCode || "未知故障"}）`
+      : isPaused
       ? "已恢复原灯效，灯光接管暂停中"
       : status.isPreviewActive
         ? "正在进行三秒灯光预览"
@@ -183,60 +183,55 @@
     setText("live-state", deviceConnectionLabel(device));
 
     const error = document.getElementById("device-error");
-    error.hidden = !device.lastErrorCode;
-    error.textContent = device.lastErrorCode ? `诊断代码：${device.lastErrorCode}` : "";
+    const diagnosticCode = status.faultCode || device.lastErrorCode;
+    error.hidden = !diagnosticCode;
+    error.textContent = diagnosticCode ? `诊断代码：${diagnosticCode}` : "";
 
-    renderBaselineRecovery(status.baselineRecovery);
-
-    pauseButton.querySelector(".action-title").textContent = status.isPaused ? "恢复" : "暂停";
-    pauseButton.querySelector(".action-description").textContent = status.isPaused
+    pauseButton.querySelector(".action-title").textContent = isPaused ? "恢复接管" : "暂停并恢复";
+    pauseButton.querySelector(".action-description").textContent = isPaused
       ? "恢复按状态驱动的侧灯"
       : "恢复原灯效并停止更新";
-  }
-
-  function renderBaselineRecovery(risk) {
-    const isCurrentMismatch = risk
-      && risk.code === "DeviceIdentityMismatch"
-      && /^[0-9a-f]{32}$/i.test(String(risk.confirmationId || ""));
-    const previousConfirmation = currentBaselineRecovery && currentBaselineRecovery.confirmationId;
-    currentBaselineRecovery = isCurrentMismatch ? risk : null;
-    baselineRecovery.hidden = !isCurrentMismatch;
-    if (!isCurrentMismatch) {
-      baselineRecoveryConfirmation.checked = false;
-      baselineRecoveryButton.disabled = true;
-      return;
-    }
-
-    document.getElementById("baseline-recovery-message").textContent = risk.message;
-    setText("baseline-device-identity", risk.baselineDeviceIdentity || "隐藏的设备实例");
-    setText("observed-device-identity", risk.observedDeviceIdentity || "隐藏的设备实例");
-    if (previousConfirmation !== risk.confirmationId) {
-      baselineRecoveryConfirmation.checked = false;
-    }
-    syncBaselineRecoveryGate();
+    pauseButton.disabled = !(isRunning || isPaused);
+    document.getElementById("preview-button").disabled = !isRunning;
   }
 
   function setStyle(prefix, style) {
     const color = String(style.color || "#000000").toUpperCase();
     const brightness = Number(style.brightness ?? 0);
+    const effect = String(style.effect || "static").toLowerCase();
+    const speed = Number(style.speed ?? 1);
     document.getElementById(`${prefix}-color`).value = color;
     document.getElementById(`${prefix}-hex`).value = color;
     document.getElementById(`${prefix}-brightness`).value = brightness;
     document.getElementById(`${prefix}-brightness-value`).textContent = `${brightness}%`;
+    document.getElementById(`${prefix}-effect`).value = effect;
+    document.getElementById(`${prefix}-speed`).value = speed;
+    syncStyleSpeed(prefix);
   }
 
   function renderSettings(settings) {
     setStyle("thinking", settings.thinking);
     setStyle("requires-input", settings.requiresInput);
     setStyle("complete", settings.complete);
+    setStyle("interrupted", settings.interrupted || {
+      color: "#FF3B30",
+      brightness: 100,
+      effect: "static",
+      speed: 1
+    });
     document.getElementById("complete-hold-seconds").value = settings.completeHoldSeconds;
     document.getElementById("launch-at-sign-in").checked = Boolean(settings.launchAtSignIn);
+    document.getElementById("keep-awake-policy").value = settings.keepAwakePolicy || "disabled";
+    document.getElementById("keep-awake-region").value = settings.keepAwakeRegion || "sideLights";
+    document.getElementById("keep-awake-refresh-seconds").value = settings.keepAwakeRefreshSeconds || 60;
   }
 
   function readStyle(prefix) {
     return {
       color: document.getElementById(`${prefix}-hex`).value.trim().toUpperCase(),
-      brightness: Number(document.getElementById(`${prefix}-brightness`).value)
+      brightness: Number(document.getElementById(`${prefix}-brightness`).value),
+      effect: document.getElementById(`${prefix}-effect`).value,
+      speed: Number(document.getElementById(`${prefix}-speed`).value)
     };
   }
 
@@ -245,8 +240,12 @@
       thinking: readStyle("thinking"),
       requiresInput: readStyle("requires-input"),
       complete: readStyle("complete"),
+      interrupted: readStyle("interrupted"),
       completeHoldSeconds: Number(document.getElementById("complete-hold-seconds").value),
-      launchAtSignIn: document.getElementById("launch-at-sign-in").checked
+      launchAtSignIn: document.getElementById("launch-at-sign-in").checked,
+      keepAwakePolicy: document.getElementById("keep-awake-policy").value,
+      keepAwakeRegion: document.getElementById("keep-awake-region").value,
+      keepAwakeRefreshSeconds: Number(document.getElementById("keep-awake-refresh-seconds").value)
     };
   }
 
@@ -370,7 +369,7 @@
       `状态 ${displayState(status.aggregateState)}`,
       `${Number(status.activeSessionCount ?? 0)} 个活动会话`
     ];
-    if (status.isPaused) {
+    if (status.lifecycleState === "Paused") {
       parts.push("已暂停");
     }
     if (status.isPreviewActive) {
@@ -384,6 +383,7 @@
     const hex = document.getElementById(`${prefix}-hex`);
     const brightness = document.getElementById(`${prefix}-brightness`);
     const output = document.getElementById(`${prefix}-brightness-value`);
+    const effect = document.getElementById(`${prefix}-effect`);
 
     color.addEventListener("input", () => {
       hex.value = color.value.toUpperCase();
@@ -399,6 +399,15 @@
     brightness.addEventListener("input", () => {
       output.textContent = `${brightness.value}%`;
     });
+
+    effect.addEventListener("change", () => syncStyleSpeed(prefix));
+  }
+
+  function syncStyleSpeed(prefix) {
+    const effect = document.getElementById(`${prefix}-effect`).value;
+    const speed = document.getElementById(`${prefix}-speed`);
+    speed.disabled = effect !== "flowing";
+    speed.title = speed.disabled ? "NuPhyIO 仅为流光开放速度控制" : "";
   }
 
   async function runBusy(button, operation) {
@@ -440,34 +449,12 @@
     runBusy(pauseButton, async () => {
       const status = await api("/api/v1/pause", {
         method: "POST",
-        body: { paused: !Boolean(currentStatus && currentStatus.isPaused) }
+        body: { paused: !Boolean(currentStatus && currentStatus.lifecycleState === "Paused") }
       });
       renderStatus(status);
-      showNotice(status.isPaused ? "灯光接管已暂停。" : "灯光接管已恢复。");
+      showNotice(status.lifecycleState === "Paused" ? "灯光接管已暂停。" : "灯光接管已恢复。");
     });
   });
-
-  document.getElementById("restore-button").addEventListener("click", event => {
-    if (!window.confirm("现在恢复精确的原始侧灯状态吗？")) {
-      return;
-    }
-
-    runBusy(event.currentTarget, async () => {
-      await api("/api/v1/restore", { method: "POST", body: {} });
-      showNotice("原始灯效已恢复。");
-      scheduleStatusRefresh();
-    });
-  });
-
-  function syncBaselineRecoveryGate() {
-    baselineRecoveryButton.disabled = !currentBaselineRecovery
-      || !baselineRecoveryConfirmation.checked;
-  }
-
-  function resetBaselineRecoveryConfirmation() {
-    baselineRecoveryConfirmation.checked = false;
-    syncBaselineRecoveryGate();
-  }
 
   function syncSessionDiagnostics() {
     const enabled = sessionDiagnosticsEnabled.checked;
@@ -490,45 +477,17 @@
     }
   }
 
-  function syncHardwareTestGate() {
-    hardwareTestButton.disabled = !hardwareTestEnabled.checked;
-  }
-
   function resetOptionalFeatures() {
     sessionDiagnosticsEnabled.checked = false;
     savedDiagnosticsEnabled.checked = false;
-    hardwareTestEnabled.checked = false;
     syncSessionDiagnostics();
     syncSavedDiagnostics();
-    syncHardwareTestGate();
   }
-
-  baselineRecoveryConfirmation.addEventListener("change", syncBaselineRecoveryGate);
-  window.addEventListener("pageshow", resetBaselineRecoveryConfirmation);
-  resetBaselineRecoveryConfirmation();
 
   sessionDiagnosticsEnabled.addEventListener("change", syncSessionDiagnostics);
   savedDiagnosticsEnabled.addEventListener("change", syncSavedDiagnostics);
-  hardwareTestEnabled.addEventListener("change", syncHardwareTestGate);
   window.addEventListener("pageshow", resetOptionalFeatures);
   resetOptionalFeatures();
-
-  hardwareTestButton.addEventListener("click", event => {
-    if (!hardwareTestEnabled.checked) {
-      showNotice("请先勾选启用硬件测试。", true);
-      return;
-    }
-
-    const selectedTransport = document.querySelector('input[name="hardware-transport"]:checked');
-    runBusy(event.currentTarget, async () => {
-      const result = await api("/api/v1/hardware-test", {
-        method: "POST",
-        body: { transport: selectedTransport.value }
-      });
-      showNotice(result.message || (result.succeeded ? "硬件测试已完成。" : "硬件测试未通过。"), !result.succeeded);
-      scheduleStatusRefresh();
-    }).finally(syncHardwareTestGate);
-  });
 
   installHooksButton.addEventListener("click", event => {
     runBusy(event.currentTarget, async () => {
@@ -541,33 +500,7 @@
     });
   });
 
-  baselineRecoveryButton.addEventListener("click", event => {
-    const risk = currentBaselineRecovery;
-    if (!risk || !baselineRecoveryConfirmation.checked) {
-      showNotice("请先确认设备不匹配处理方式。", true);
-      return;
-    }
-
-    if (!window.confirm("放弃旧设备的基线接管标记，并且不把旧数据写入当前设备吗？")) {
-      resetBaselineRecoveryConfirmation();
-      return;
-    }
-
-    // The browser consumes this one confirmation before the request. The Host
-    // independently binds it to the still-current mismatch and owned journal.
-    currentBaselineRecovery = null;
-    resetBaselineRecoveryConfirmation();
-    runBusy(event.currentTarget, async () => {
-      const result = await api("/api/v1/baseline-recovery/abandon", {
-        method: "POST",
-        body: { confirmationId: risk.confirmationId, confirmed: true }
-      });
-      showNotice(result.message || "已放弃旧基线接管标记。");
-      await refreshStatus();
-    }).finally(syncBaselineRecoveryGate);
-  });
-
-  ["thinking", "requires-input", "complete"].forEach(bindStyleInputs);
+  ["thinking", "requires-input", "complete", "interrupted"].forEach(bindStyleInputs);
 
   document.getElementById("clear-session-log").addEventListener("click", () => {
     document.getElementById("event-log").replaceChildren();

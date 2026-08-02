@@ -11,6 +11,42 @@ public sealed class HidWorkerTests
     private static readonly byte[] Complete = [0x02, 0x64, 0x01, 0x00, 0x00, 0x00, 0xFF, 0x00];
 
     [Fact]
+    public async Task RefreshDesiredSideLightAsync_ActiveTarget_RewritesWithoutRecapturingBaseline()
+    {
+        var transport = new MockLightingTransport(Baseline);
+        var store = new InMemoryBaselineOwnershipStore();
+        await using var worker = new HidLightingWorker(transport, store);
+        worker.Start();
+
+        await worker.SetSideLightAsync(Thinking);
+        await worker.RefreshDesiredSideLightAsync();
+
+        Assert.Equal(2, transport.Writes.Count);
+        Assert.All(transport.Writes, write => Assert.Equal(Thinking, write));
+        Assert.Equal(1, transport.Operations.Count(operation => operation == "connect"));
+        Assert.Equal(1, transport.Operations.Count(operation => operation == "read"));
+        Assert.True((await store.LoadAsync())!.IsOwned);
+    }
+
+    [Fact]
+    public async Task PulseCurrentSideLightAsync_Idle_WritesSameStateAndReleasesRecoveryRecord()
+    {
+        var transport = new MockLightingTransport(Baseline);
+        var store = new InMemoryBaselineOwnershipStore();
+        await using var worker = new HidLightingWorker(transport, store);
+        worker.Start();
+
+        await worker.PulseCurrentSideLightAsync();
+
+        Assert.Equal(
+            new[] { "connect", "read", "write", "read", "disconnect" },
+            transport.Operations);
+        Assert.Equal(Baseline, Assert.Single(transport.Writes));
+        Assert.False((await store.LoadAsync())!.IsOwned);
+        Assert.Equal(LightingWorkerState.Idle, worker.Snapshot.State);
+    }
+
+    [Fact]
     public async Task Snapshot_FreshIdleThenConnected_OnlyReportsObservedInterfaceFingerprint()
     {
         var session = new LightingDeviceSession(
@@ -363,7 +399,7 @@ public sealed class HidWorkerTests
     }
 
     [Fact]
-    public async Task AbandonMismatchedBaselineAsync_RequiresCurrentChallengeAndNeverWritesHid()
+    public async Task SetSideLightAsync_DeviceIdentityMismatch_AbandonsOldRecordWithoutRestoringIt()
     {
         var observedSession = new LightingDeviceSession(
             "19F5:1026/path=observed-device",
@@ -394,32 +430,13 @@ public sealed class HidWorkerTests
 
         await worker.SetSideLightAsync(Thinking);
 
-        BaselineIdentityMismatchNotice notice = Assert.IsType<BaselineIdentityMismatchNotice>(
-            worker.Snapshot.BaselineMismatch);
-        Assert.Equal(LightingWorkerState.Faulted, worker.Snapshot.State);
-        Assert.Equal(LightingTransportFailureKind.BaselineMismatch, worker.Snapshot.LastFailure);
-        Assert.Empty(transport.Writes);
-
-        BaselineMismatchRecoveryResult stale = await worker
-            .AbandonMismatchedBaselineAsync(Guid.NewGuid().ToString("N"), confirmed: true);
-        BaselineMismatchRecoveryResult unconfirmed = await worker
-            .AbandonMismatchedBaselineAsync(notice.ConfirmationId, confirmed: false);
-        Assert.Equal(BaselineMismatchRecoveryStatus.StaleConfirmation, stale.Status);
-        Assert.Equal(BaselineMismatchRecoveryStatus.NotConfirmed, unconfirmed.Status);
-        Assert.True(Assert.IsType<BaselineOwnershipRecord>(await store.LoadAsync()).IsOwned);
-        Assert.Empty(transport.Writes);
-
-        BaselineMismatchRecoveryResult released = await worker
-            .AbandonMismatchedBaselineAsync(notice.ConfirmationId, confirmed: true);
-        BaselineMismatchRecoveryResult repeated = await worker
-            .AbandonMismatchedBaselineAsync(notice.ConfirmationId, confirmed: true);
-
-        Assert.Equal(BaselineMismatchRecoveryStatus.Released, released.Status);
-        Assert.Equal(BaselineMismatchRecoveryStatus.NoPendingMismatch, repeated.Status);
-        Assert.Equal(LightingWorkerState.Paused, worker.Snapshot.State);
-        Assert.False(Assert.IsType<BaselineOwnershipRecord>(await store.LoadAsync()).IsOwned);
-        Assert.Empty(transport.Writes);
-        Assert.Equal(4, transport.Operations.Count(operation => operation == "inspect"));
+        Assert.Equal(LightingWorkerState.Active, worker.Snapshot.State);
+        Assert.Single(transport.Writes);
+        Assert.Equal(Thinking, transport.Writes[0]);
+        BaselineOwnershipRecord replacement = Assert.IsType<BaselineOwnershipRecord>(
+            await store.LoadAsync());
+        Assert.True(replacement.IsOwned);
+        Assert.Equal(observedSession.DeviceIdentity, replacement.DeviceIdentity);
     }
 
     [Fact]
@@ -477,8 +494,6 @@ public sealed class HidWorkerTests
     [Theory]
     [InlineData(LightingTransportFailureKind.DeviceDisconnected)]
     [InlineData(LightingTransportFailureKind.DeviceBusy)]
-    [InlineData(LightingTransportFailureKind.ReceiverUnavailable)]
-    [InlineData(LightingTransportFailureKind.KeyboardSleeping)]
     [InlineData(LightingTransportFailureKind.Timeout)]
     public void GetDelay_TransientFailureAtAnyAttempt_NeverExceedsFiveSeconds(
         LightingTransportFailureKind failureKind)
@@ -644,11 +659,13 @@ public sealed class HidWorkerTests
             await store.LoadAsync());
         Assert.True(captured.IsOwned);
 
-        await worker.RestoreAsync();
+        LightingTransportException failure = await Assert.ThrowsAsync<LightingTransportException>(
+            () => worker.RestoreAsync());
 
         BaselineOwnershipRecord afterMismatch = Assert.IsType<BaselineOwnershipRecord>(
             await store.LoadAsync());
         Assert.True(afterMismatch.IsOwned);
+        Assert.Equal(LightingTransportFailureKind.BaselineMismatch, failure.Kind);
         Assert.Equal(captured.OwnershipMarker, afterMismatch.OwnershipMarker);
         Assert.Equal(LightingWorkerState.Faulted, worker.Snapshot.State);
         Assert.Equal(LightingTransportFailureKind.BaselineMismatch, worker.Snapshot.LastFailure);

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentKick75.App.Diagnostics;
 using AgentKick75.App.Ipc;
+using AgentKick75.Core.Lighting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
@@ -119,7 +120,7 @@ internal static class ControlPageEndpoints
             {
                 return Results.ValidationProblem(new Dictionary<string, string[]>
                 {
-                    ["state"] = ["State must be thinking, requires-input, or complete."],
+                    ["state"] = ["State must be thinking, requires-input, complete, or interrupted."],
                 });
             }
 
@@ -133,58 +134,8 @@ internal static class ControlPageEndpoints
             Results.Ok(ControlPlanePrivacy.SanitizeStatus(
                 await controlPlane.SetPausedAsync(request.Paused, cancellationToken))));
 
-        api.MapPost("/restore", async (CancellationToken cancellationToken) =>
-        {
-            await controlPlane.RestoreOriginalLightingAsync(cancellationToken);
-            return Results.Ok(new { restored = true });
-        });
-
         api.MapPost("/hooks/install", async (CancellationToken cancellationToken) =>
             Results.Ok(await controlPlane.InstallCodexHooksAsync(cancellationToken)));
-
-        api.MapPost("/hardware-test", async (
-            HardwareTestRequestDto request,
-            CancellationToken cancellationToken) =>
-        {
-            string transport = request.Transport?.Trim().ToLowerInvariant() ?? string.Empty;
-            if (transport is not ("auto" or "usb" or "dongle"))
-            {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["transport"] = ["Transport must be auto, usb, or dongle."],
-                });
-            }
-
-            HardwareTestResultDto result = await controlPlane.RunHardwareTestAsync(
-                request with { Transport = transport },
-                cancellationToken);
-            return Results.Ok(result);
-        });
-
-        api.MapPost("/baseline-recovery/abandon", async (
-            BaselineRecoveryDispositionRequestDto? request,
-            CancellationToken cancellationToken) =>
-        {
-            if (request is null || !request.Confirmed)
-            {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["confirmed"] = ["Explicit confirmation is required before abandoning baseline ownership."],
-                });
-            }
-
-            if (!Guid.TryParseExact(request.ConfirmationId, "N", out _))
-            {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["confirmationId"] = ["The baseline recovery confirmation is invalid or stale."],
-                });
-            }
-
-            BaselineRecoveryDispositionDto result = await controlPlane
-                .AbandonMismatchedBaselineAsync(request, cancellationToken);
-            return result.Succeeded ? Results.Ok(result) : Results.Conflict(result);
-        });
 
         api.MapGet("/events", context => StreamEventsAsync(
             context,
@@ -286,10 +237,31 @@ internal static class ControlPageEndpoints
             "requiresInput",
             errors);
         ControlLightStyleDto? complete = NormalizeStyle(settings.Complete, "complete", errors);
+        ControlLightStyleDto? interrupted = NormalizeStyle(
+            settings.Interrupted ?? new ControlLightStyleDto("#FF3B30", 100),
+            "interrupted",
+            errors);
 
         if (settings.CompleteHoldSeconds is < 1 or > 3600)
         {
             errors["completeHoldSeconds"] = ["Complete hold duration must be between 1 and 3600 seconds."];
+        }
+
+        string keepAwakePolicy = settings.KeepAwakePolicy?.Trim() ?? string.Empty;
+        if (keepAwakePolicy is not ("disabled" or "codexActive" or "hostRunning"))
+        {
+            errors["keepAwakePolicy"] = ["Keep-awake policy must be disabled, codexActive, or hostRunning."];
+        }
+
+        string keepAwakeRegion = settings.KeepAwakeRegion?.Trim() ?? string.Empty;
+        if (keepAwakeRegion != "sideLights")
+        {
+            errors["keepAwakeRegion"] = ["Only side-light keep-awake is supported."];
+        }
+
+        if (settings.KeepAwakeRefreshSeconds is < 10 or > 300)
+        {
+            errors["keepAwakeRefreshSeconds"] = ["Keep-awake refresh must be between 10 and 300 seconds."];
         }
 
         if (errors.Count != 0)
@@ -302,7 +274,11 @@ internal static class ControlPageEndpoints
             requiresInput!,
             complete!,
             settings.CompleteHoldSeconds,
-            settings.LaunchAtSignIn);
+            settings.LaunchAtSignIn,
+            interrupted!,
+            keepAwakePolicy,
+            settings.KeepAwakeRefreshSeconds,
+            keepAwakeRegion);
         return true;
     }
 
@@ -328,7 +304,19 @@ internal static class ControlPageEndpoints
             errors[$"{fieldName}.brightness"] = ["Brightness must be between 0 and 100."];
         }
 
-        return new ControlLightStyleDto(color, style.Brightness);
+        string effect = style.Effect?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (effect is not ("flowing" or "static" or "breathing"))
+        {
+            errors[$"{fieldName}.effect"] = ["Effect must be flowing, static, or breathing."];
+        }
+
+        if (style.Speed is < LightStyle.MinimumSpeed or > LightStyle.MaximumSpeed)
+        {
+            errors[$"{fieldName}.speed"] =
+                [$"Speed must be between {LightStyle.MinimumSpeed} and {LightStyle.MaximumSpeed}."];
+        }
+
+        return new ControlLightStyleDto(color, style.Brightness, effect, style.Speed);
     }
 
     private static bool IsHexColor(string color)
@@ -361,6 +349,9 @@ internal static class ControlPageEndpoints
                 return true;
             case "complete":
                 parsedState = ControlPreviewState.Complete;
+                return true;
+            case "interrupted":
+                parsedState = ControlPreviewState.Interrupted;
                 return true;
             default:
                 parsedState = default;

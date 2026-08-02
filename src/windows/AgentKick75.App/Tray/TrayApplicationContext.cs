@@ -9,9 +9,12 @@ public sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly HostCoordinator coordinator;
     private readonly NotifyIcon notifyIcon;
+    private readonly Icon appIcon;
+    private readonly ContextMenuStrip menu;
     private readonly ToolStripMenuItem pauseItem;
+    private readonly ToolStripMenuItem startupItem;
     private readonly Uri? controlPageUri;
-    private bool paused;
+    private ApplicationLifecycleState lifecycleState;
     private bool exiting;
 
     public TrayApplicationContext(HostCoordinator coordinator, Uri? controlPageUri = null)
@@ -23,39 +26,41 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             Enabled = controlPageUri is not null,
         };
-        pauseItem = new ToolStripMenuItem("暂停接管", null, TogglePause);
-        var restoreItem = new ToolStripMenuItem("恢复原灯效", null, RestoreBaseline);
+        pauseItem = new ToolStripMenuItem("暂停并恢复", null, TogglePause);
         var hardwareTestItem = new ToolStripMenuItem("硬件测试…", null, OpenControlPage)
         {
             Enabled = controlPageUri is not null,
         };
-        var startupItem = new ToolStripMenuItem("开机启动（安装阶段配置）")
+        startupItem = new ToolStripMenuItem("登录时启动", null, ToggleStartup)
         {
-            Enabled = false,
+            Checked = coordinator.StartAtLogin,
         };
         var exitItem = new ToolStripMenuItem("退出", null, ExitRequested);
 
-        var menu = new ContextMenuStrip();
+        menu = new ContextMenuStrip();
         menu.Items.AddRange(
         [
             openItem,
             pauseItem,
-            restoreItem,
             hardwareTestItem,
             startupItem,
             new ToolStripSeparator(),
             exitItem,
         ]);
+        _ = menu.Handle;
 
+        appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath)
+            ?? (Icon)SystemIcons.Application.Clone();
         notifyIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = appIcon,
             Text = "AgentKick75 Codex 状态灯",
             ContextMenuStrip = menu,
             Visible = true,
         };
         notifyIcon.DoubleClick += OpenControlPage;
         coordinator.StatusChanged += CoordinatorStatusChanged;
+        coordinator.ShutdownRequested += CoordinatorShutdownRequested;
     }
 
     protected override void Dispose(bool disposing)
@@ -63,8 +68,11 @@ public sealed class TrayApplicationContext : ApplicationContext
         if (disposing)
         {
             coordinator.StatusChanged -= CoordinatorStatusChanged;
+            coordinator.ShutdownRequested -= CoordinatorShutdownRequested;
             notifyIcon.Visible = false;
             notifyIcon.Dispose();
+            menu.Dispose();
+            appIcon.Dispose();
         }
 
         base.Dispose(disposing);
@@ -74,15 +82,20 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         if (Application.MessageLoop)
         {
-            pauseItem.Owner?.BeginInvoke(new Action(() => ApplyStatus(status)));
+            menu.BeginInvoke(new Action(() => ApplyStatus(status)));
         }
     }
 
     private void ApplyStatus(HostStatusSnapshot status)
     {
-        paused = status.Paused;
-        pauseItem.Text = paused ? "恢复接管" : "暂停接管";
-        notifyIcon.Text = status.Paused
+        lifecycleState = status.LifecycleState;
+        pauseItem.Text = lifecycleState == ApplicationLifecycleState.Paused
+            ? "恢复接管"
+            : "暂停并恢复";
+        pauseItem.Enabled = lifecycleState is ApplicationLifecycleState.Running or
+            ApplicationLifecycleState.Paused;
+        startupItem.Checked = coordinator.StartAtLogin;
+        notifyIcon.Text = lifecycleState == ApplicationLifecycleState.Paused
             ? "AgentKick75（已暂停）"
             : $"AgentKick75（{status.AggregateState}）";
     }
@@ -104,7 +117,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            if (paused)
+            if (lifecycleState == ApplicationLifecycleState.Paused)
             {
                 await coordinator.ResumeAsync().ConfigureAwait(true);
             }
@@ -119,15 +132,23 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private async void RestoreBaseline(object? sender, EventArgs eventArgs)
+    private async void ToggleStartup(object? sender, EventArgs eventArgs)
     {
+        startupItem.Enabled = false;
         try
         {
-            await coordinator.RestoreAsync().ConfigureAwait(true);
+            await coordinator.UpdateSettingsAsync(
+                coordinator.LightingSettings,
+                !coordinator.StartAtLogin).ConfigureAwait(true);
+            startupItem.Checked = coordinator.StartAtLogin;
         }
         catch (Exception exception)
         {
             ShowError(exception.Message);
+        }
+        finally
+        {
+            startupItem.Enabled = true;
         }
     }
 
@@ -141,6 +162,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         exiting = true;
         notifyIcon.Visible = false;
         ExitThread();
+    }
+
+    private void CoordinatorShutdownRequested(object? sender, EventArgs eventArgs)
+    {
+        if (Application.MessageLoop)
+        {
+            menu.BeginInvoke(new Action(() => ExitRequested(sender, eventArgs)));
+        }
     }
 
     private static void ShowError(string message)

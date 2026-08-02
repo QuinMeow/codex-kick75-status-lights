@@ -143,7 +143,6 @@ public sealed class GuardedHardwareTestServiceTests
 
         HardwareTestCommandResult result = await command.RunAsync(
             new HardwareTestArguments(
-                HardwareTransportChoice.Usb,
                 cycles: 1,
                 greenDuration: TimeSpan.Zero));
 
@@ -451,45 +450,6 @@ public sealed class GuardedHardwareTestServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_DonglePreference_IsDiagnosticOnlyAndNeverOpensDevice()
-    {
-        HidInterfaceDescriptor dongle = DongleDevice();
-        var device = new FakeHidDevice(Baseline);
-        FakeConnectionFactory factory = new(() => new FakeHidConnection(dongle, device));
-        GuardedHardwareTestService service = new(
-            new FakeEnumerator(dongle),
-            new HidDeviceSelector(),
-            factory,
-            new TestHardwareBaselineJournal(),
-            new ImmediateDelay());
-
-        HardwareTestResult result = await service.RunAsync(
-            TestOptions(cycles: 1) with { Transport = HidTransportPreference.Dongle });
-
-        Assert.Equal(HardwareTestOutcome.NoGo, result.Outcome);
-        Assert.Equal(HidDeviceState.DiagnosticOnly, result.DeviceState);
-        Assert.Equal(0, factory.OpenCount);
-        Assert.Empty(device.Writes);
-    }
-
-    [Fact]
-    public async Task InitializeAsync_DongleTimeout_LeavesReceiverPresentNotReady()
-    {
-        var device = new FakeHidDevice(Baseline)
-        {
-            AlwaysTimeoutReads = true,
-        };
-        FakeHidConnection connection = new(DongleDevice(), device);
-        await using Kick75HidProtocolClient client = new(connection, TimeSpan.FromMilliseconds(10));
-
-        await Assert.ThrowsAsync<TimeoutException>(
-            async () => await client.InitializeAsync());
-
-        Assert.False(client.IsReady);
-        Assert.Equal(HidDeviceState.ReceiverPresent, client.State);
-    }
-
-    [Fact]
     public void PublicLightingTransportSurface_ExposesOnlyPairedWrite()
     {
         string[] interfaceWrites = typeof(IKick75LightingTransport)
@@ -636,9 +596,6 @@ public sealed class GuardedHardwareTestServiceTests
         ushort outputLength = 65) =>
         new("usb", 0x19F5, 0x1026, 0x0001, 0x0000, inputLength, outputLength);
 
-    private static HidInterfaceDescriptor DongleDevice() =>
-        new("dongle", 0x19F5, 0x2620, 0x0001, 0x0000, 65, 65);
-
     private sealed class FakeEnumerator(params HidInterfaceDescriptor[] devices) : IHidDeviceEnumerator
     {
         public IReadOnlyList<HidInterfaceDescriptor> Enumerate() => devices;
@@ -760,8 +717,6 @@ public sealed class GuardedHardwareTestServiceTests
 
         public bool CorruptStableReadbackAfterRestore { get; init; }
 
-        public bool AlwaysTimeoutReads { get; init; }
-
         public int? SwitchToModeZeroOnBaseInfoRead { get; init; }
 
         public bool ShouldFailGreenAcknowledgement() =>
@@ -802,9 +757,7 @@ public sealed class GuardedHardwareTestServiceTests
             Device = descriptor;
             this.device = device;
             ReportedCurrentMode = reportedCurrentMode;
-            State = descriptor.ProductId == 0x2620
-                ? HidDeviceState.ReceiverPresent
-                : HidDeviceState.Present;
+            State = HidDeviceState.Present;
         }
 
         public HidInterfaceDescriptor Device { get; }
@@ -861,11 +814,6 @@ public sealed class GuardedHardwareTestServiceTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (device.AlwaysTimeoutReads)
-            {
-                return ValueTask.FromException<byte[]>(new TimeoutException("Simulated timeout."));
-            }
-
             if (device.ShouldFailImmediateTargetReadback())
             {
                 return ValueTask.FromException<byte[]>(

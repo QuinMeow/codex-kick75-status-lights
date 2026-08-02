@@ -57,7 +57,6 @@ public static class HookCommand
                 sessionId = hook.SessionId,
                 turnId = hook.TurnId,
                 toolName = hook.ToolName,
-                toolUseId = hook.ToolUseId,
             });
             _ = await pipeClient.SendAsync(
                 envelope,

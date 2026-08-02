@@ -46,7 +46,6 @@ public sealed class ControlPageApiTests
                 sessionId = "session-1",
                 turnId = "turn-1",
                 toolName = (string?)null,
-                toolUseId = (string?)null,
             });
             using HttpClient unauthorizedClient = CreateClient(server);
             using HttpResponseMessage unauthorized = await unauthorizedClient.PostAsJsonAsync(
@@ -107,29 +106,27 @@ public sealed class ControlPageApiTests
         Assert.True(scriptResponse.Headers.CacheControl?.NoStore is true);
         Assert.Contains("AgentKick75", html, StringComparison.Ordinal);
         Assert.Contains("五段侧灯预览", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"hardware-test-button\" type=\"button\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"install-hooks-button\" type=\"button\"", html, StringComparison.Ordinal);
         Assert.Contains("首次启动会自动安装", html, StringComparison.Ordinal);
         Assert.Contains("/api/v1/hooks/install", javaScript, StringComparison.Ordinal);
-        Assert.Contains("id=\"hardware-test-enabled\" type=\"checkbox\"", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"hardware-test-button\" type=\"button\" disabled", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"thinking-effect\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"interrupted-effect\"", html, StringComparison.Ordinal);
+        Assert.Contains("value=\"flowing\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"session-diagnostics-enabled\" type=\"checkbox\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"saved-diagnostics-enabled\" type=\"checkbox\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"clear-session-log\" type=\"button\" disabled", html, StringComparison.Ordinal);
         Assert.Contains("id=\"load-recent-diagnostics\" type=\"button\" disabled", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"baseline-recovery\"", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"baseline-recovery-confirmation\" type=\"checkbox\" autocomplete=\"off\"", html, StringComparison.Ordinal);
-        Assert.Contains("放弃旧基线接管", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("baseline-recovery", html, StringComparison.Ordinal);
         Assert.Contains("会话诊断", html, StringComparison.Ordinal);
         Assert.Contains("仅内存", html, StringComparison.Ordinal);
         Assert.Contains("M4 安装后生效", html, StringComparison.Ordinal);
         Assert.Contains("设备标识", html, StringComparison.Ordinal);
         Assert.Contains("描述符 / 接口指纹", html, StringComparison.Ordinal);
         Assert.Contains("id=\"interface-fingerprint\">未知", html, StringComparison.Ordinal);
-        Assert.Contains("value=\"dongle\" disabled", html, StringComparison.Ordinal);
-        Assert.Contains("Dongle（仅诊断）", html, StringComparison.Ordinal);
-        Assert.Contains(".hardware-panel", styles, StringComparison.Ordinal);
-        Assert.Contains(".baseline-recovery", styles, StringComparison.Ordinal);
+        Assert.DoesNotContain("hardware-test", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("dongle", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("/api/v1/hardware-test", javaScript, StringComparison.Ordinal);
+        Assert.DoesNotContain(".baseline-recovery", styles, StringComparison.Ordinal);
         Assert.Contains(".session-diagnostics", styles, StringComparison.Ordinal);
         Assert.Contains(options.WriteToken, html, StringComparison.Ordinal);
         Assert.DoesNotContain(ControlPageAssetsTokenPlaceholder, html, StringComparison.Ordinal);
@@ -143,8 +140,8 @@ public sealed class ControlPageApiTests
         Assert.DoesNotContain("Settings saved and applied.", javaScript, StringComparison.Ordinal);
         Assert.DoesNotContain("localStorage", javaScript, StringComparison.Ordinal);
         Assert.DoesNotContain("sessionStorage", javaScript, StringComparison.Ordinal);
-        Assert.Contains("window.addEventListener(\"pageshow\", resetBaselineRecoveryConfirmation)", javaScript, StringComparison.Ordinal);
-        Assert.Contains("/api/v1/baseline-recovery/abandon", javaScript, StringComparison.Ordinal);
+        Assert.DoesNotContain("/api/v1/restore", javaScript, StringComparison.Ordinal);
+        Assert.DoesNotContain("/api/v1/baseline-recovery/abandon", javaScript, StringComparison.Ordinal);
         Assert.Contains("device.interfaceFingerprint || \"未知\"", javaScript, StringComparison.Ordinal);
         Assert.Contains("setText(\"live-state\", deviceConnectionLabel(device))", javaScript, StringComparison.Ordinal);
         Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
@@ -284,6 +281,33 @@ public sealed class ControlPageApiTests
     }
 
     [Fact]
+    public async Task PutSettings_WholeKeyboardKeepAwake_RejectsBeforeControlPlane()
+    {
+        var controlPlane = new FakeControlPlane();
+        ControlPageOptions options = CreateOptions();
+        await using AgentKick75ControlServer server = await AgentKick75ControlServer.StartAsync(
+            controlPlane,
+            options);
+        using HttpClient client = CreateClient(server);
+        ControlSettingsDto invalid = controlPlane.Settings with
+        {
+            KeepAwakePolicy = "hostRunning",
+            KeepAwakeRegion = "wholeKeyboard",
+        };
+
+        using HttpRequestMessage request = CreateWriteRequest(
+            server,
+            HttpMethod.Put,
+            "/api/v1/settings",
+            invalid,
+            options.WriteToken);
+        using HttpResponseMessage response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(0, controlPlane.ApplySettingsCallCount);
+    }
+
+    [Fact]
     public async Task PostPreview_ValidState_AlwaysUsesThreeSecondRestoreWindow()
     {
         var controlPlane = new FakeControlPlane();
@@ -307,7 +331,7 @@ public sealed class ControlPageApiTests
     }
 
     [Fact]
-    public async Task StatusPauseAndRestore_ValidRequests_InvokeControlPlane()
+    public async Task StatusAndPause_ValidRequests_UseLifecycleState()
     {
         var controlPlane = new FakeControlPlane();
         ControlPageOptions options = CreateOptions();
@@ -327,48 +351,13 @@ public sealed class ControlPageApiTests
         using HttpResponseMessage pauseResponse = await client.SendAsync(pauseRequest);
         ControlStatusDto? paused = await pauseResponse.Content.ReadFromJsonAsync<ControlStatusDto>();
 
-        using HttpRequestMessage restoreRequest = CreateWriteRequest(
-            server,
-            HttpMethod.Post,
-            "/api/v1/restore",
-            new { },
-            options.WriteToken);
-        using HttpResponseMessage restoreResponse = await client.SendAsync(restoreRequest);
-
         Assert.NotNull(initial);
-        Assert.False(initial.IsPaused);
+        Assert.Equal("Running", initial.LifecycleState);
         Assert.Equal("19F5:1026", initial.Device.DeviceIdentity);
         Assert.Equal("mock-interface-fingerprint", initial.Device.InterfaceFingerprint);
-        Assert.Equal("19F5:1026", initial.BaselineRecovery?.BaselineDeviceIdentity);
-        Assert.Equal("19F5:1026", initial.BaselineRecovery?.ObservedDeviceIdentity);
         Assert.Equal(HttpStatusCode.OK, pauseResponse.StatusCode);
         Assert.NotNull(paused);
-        Assert.True(paused.IsPaused);
-        Assert.Equal(HttpStatusCode.OK, restoreResponse.StatusCode);
-        Assert.Equal(1, controlPlane.RestoreCallCount);
-    }
-
-    [Fact]
-    public async Task PostHardwareTest_NormalizesTransport()
-    {
-        var controlPlane = new FakeControlPlane();
-        ControlPageOptions options = CreateOptions();
-        await using AgentKick75ControlServer server = await AgentKick75ControlServer.StartAsync(
-            controlPlane,
-            options);
-        using HttpClient client = CreateClient(server);
-
-        using HttpRequestMessage request = CreateWriteRequest(
-            server,
-            HttpMethod.Post,
-            "/api/v1/hardware-test",
-            new HardwareTestRequestDto(" USB "),
-            options.WriteToken);
-        using HttpResponseMessage response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(1, controlPlane.HardwareTestCallCount);
-        Assert.Equal("usb", controlPlane.LastHardwareTestRequest?.Transport);
+        Assert.Equal("Paused", paused.LifecycleState);
     }
 
     [Fact]
@@ -395,112 +384,6 @@ public sealed class ControlPageApiTests
         Assert.Equal(1, controlPlane.HookInstallCallCount);
         Assert.True(result?.Succeeded);
         Assert.Equal(6, result?.RegisteredHandlerCount);
-    }
-
-    [Fact]
-    public async Task PostBaselineRecoveryAbandon_RequiresTokenOriginFetchAndExplicitConfirmation()
-    {
-        const string confirmationId = "00112233445566778899aabbccddeeff";
-        var controlPlane = new FakeControlPlane();
-        ControlPageOptions options = CreateOptions();
-        await using AgentKick75ControlServer server = await AgentKick75ControlServer.StartAsync(
-            controlPlane,
-            options);
-        using HttpClient client = CreateClient(server);
-        var confirmed = new BaselineRecoveryDispositionRequestDto(confirmationId, true);
-
-        using HttpRequestMessage missingToken = CreateWriteRequest(
-            server,
-            HttpMethod.Post,
-            "/api/v1/baseline-recovery/abandon",
-            confirmed,
-            token: null);
-        using HttpResponseMessage missingTokenResponse = await client.SendAsync(missingToken);
-
-        using HttpRequestMessage badOrigin = CreateWriteRequest(
-            server,
-            HttpMethod.Post,
-            "/api/v1/baseline-recovery/abandon",
-            confirmed,
-            options.WriteToken,
-            origin: "https://example.test");
-        using HttpResponseMessage badOriginResponse = await client.SendAsync(badOrigin);
-
-        using var missingFetch = new HttpRequestMessage(
-            HttpMethod.Post,
-            "/api/v1/baseline-recovery/abandon")
-        {
-            Content = JsonContent.Create(confirmed),
-        };
-        missingFetch.Headers.Add("Origin", server.BaseUri.GetLeftPart(UriPartial.Authority));
-        missingFetch.Headers.Add(ControlPageOptions.TokenHeaderName, options.WriteToken);
-        using HttpResponseMessage missingFetchResponse = await client.SendAsync(missingFetch);
-
-        using HttpRequestMessage unconfirmed = CreateWriteRequest(
-            server,
-            HttpMethod.Post,
-            "/api/v1/baseline-recovery/abandon",
-            confirmed with { Confirmed = false },
-            options.WriteToken);
-        using HttpResponseMessage unconfirmedResponse = await client.SendAsync(unconfirmed);
-
-        using HttpRequestMessage invalidChallenge = CreateWriteRequest(
-            server,
-            HttpMethod.Post,
-            "/api/v1/baseline-recovery/abandon",
-            confirmed with { ConfirmationId = "stale" },
-            options.WriteToken);
-        using HttpResponseMessage invalidChallengeResponse = await client.SendAsync(invalidChallenge);
-
-        using HttpRequestMessage valid = CreateWriteRequest(
-            server,
-            HttpMethod.Post,
-            "/api/v1/baseline-recovery/abandon",
-            confirmed,
-            options.WriteToken);
-        using HttpResponseMessage validResponse = await client.SendAsync(valid);
-        BaselineRecoveryDispositionDto? result = await validResponse.Content
-            .ReadFromJsonAsync<BaselineRecoveryDispositionDto>();
-
-        Assert.Equal(HttpStatusCode.Forbidden, missingTokenResponse.StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, badOriginResponse.StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, missingFetchResponse.StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, unconfirmedResponse.StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, invalidChallengeResponse.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, validResponse.StatusCode);
-        Assert.True(result?.Succeeded);
-        Assert.Equal(1, controlPlane.BaselineRecoveryCallCount);
-        Assert.Equal(confirmed, controlPlane.LastBaselineRecoveryRequest);
-    }
-
-    [Fact]
-    public async Task PostBaselineRecoveryAbandon_StaleOrMissingMismatch_ReturnsConflict()
-    {
-        var controlPlane = new FakeControlPlane
-        {
-            BaselineRecoveryResult = new BaselineRecoveryDispositionDto(
-                false,
-                "NoPendingMismatch",
-                "There is no currently observed baseline identity mismatch to abandon."),
-        };
-        ControlPageOptions options = CreateOptions();
-        await using AgentKick75ControlServer server = await AgentKick75ControlServer.StartAsync(
-            controlPlane,
-            options);
-        using HttpClient client = CreateClient(server);
-        using HttpRequestMessage request = CreateWriteRequest(
-            server,
-            HttpMethod.Post,
-            "/api/v1/baseline-recovery/abandon",
-            new BaselineRecoveryDispositionRequestDto(
-                "00112233445566778899aabbccddeeff",
-                true),
-            options.WriteToken);
-
-        using HttpResponseMessage response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        Assert.Equal(1, controlPlane.BaselineRecoveryCallCount);
     }
 
     [Fact]
@@ -742,7 +625,8 @@ public sealed class ControlPageApiTests
             "Thinking",
             2,
             FixedTimestamp,
-            IsPaused: false,
+            LifecycleState: "Running",
+            FaultCode: null,
             IsPreviewActive: false,
             HookStatus: "Enabled",
             Device: new DeviceDiagnosticsDto(
@@ -754,13 +638,7 @@ public sealed class ControlPageApiTests
                 FirmwareVersion: null,
                 DeviceIdentity: "19F5:1026/path=private-hid-path",
                 LastErrorCode: null,
-                InterfaceFingerprint: "mock-interface-fingerprint"),
-            BaselineRecovery: new BaselineRecoveryRiskDto(
-                "DeviceIdentityMismatch",
-                "00112233445566778899aabbccddeeff",
-                "Recovery blocked because the observed device does not match the saved baseline owner.",
-                "19F5:1026/path=old-baseline-private-path",
-                "19F5:1026/path=observed-device-private-path"));
+                InterfaceFingerprint: "mock-interface-fingerprint"));
 
         public ControlSettingsDto Settings { get; private set; } = new(
             new ControlLightStyleDto("#006BFF", 100),
@@ -803,26 +681,11 @@ public sealed class ControlPageApiTests
 
         public int ApplySettingsCallCount { get; private set; }
 
-        public int HardwareTestCallCount { get; private set; }
-
         public int HookInstallCallCount { get; private set; }
-
-        public int BaselineRecoveryCallCount { get; private set; }
-
-        public int RestoreCallCount { get; private set; }
 
         public ControlPreviewState? LastPreviewState { get; private set; }
 
         public TimeSpan? LastPreviewDuration { get; private set; }
-
-        public HardwareTestRequestDto? LastHardwareTestRequest { get; private set; }
-
-        public BaselineRecoveryDispositionRequestDto? LastBaselineRecoveryRequest { get; private set; }
-
-        public BaselineRecoveryDispositionDto BaselineRecoveryResult { get; set; } = new(
-            true,
-            "Released",
-            "The old baseline ownership was abandoned without writing baseline bytes.");
 
         public ValueTask<ControlStatusDto> GetStatusAsync(CancellationToken cancellationToken)
         {
@@ -857,27 +720,8 @@ public sealed class ControlPageApiTests
             bool isPaused,
             CancellationToken cancellationToken)
         {
-            Status = Status with { IsPaused = isPaused };
+            Status = Status with { LifecycleState = isPaused ? "Paused" : "Running" };
             return ValueTask.FromResult(Status);
-        }
-
-        public ValueTask RestoreOriginalLightingAsync(CancellationToken cancellationToken)
-        {
-            RestoreCallCount++;
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask<HardwareTestResultDto> RunHardwareTestAsync(
-            HardwareTestRequestDto request,
-            CancellationToken cancellationToken)
-        {
-            HardwareTestCallCount++;
-            LastHardwareTestRequest = request;
-            return ValueTask.FromResult(new HardwareTestResultDto(
-                Succeeded: true,
-                Status: "passed",
-                Message: "Baseline restored.",
-                Transport: request.Transport));
         }
 
         public ValueTask<HookInstallationResultDto> InstallCodexHooksAsync(
@@ -891,16 +735,6 @@ public sealed class ControlPageApiTests
                 6,
                 "installed",
                 "Codex Hook 已安装，无需修改。"));
-        }
-
-        public ValueTask<BaselineRecoveryDispositionDto> AbandonMismatchedBaselineAsync(
-            BaselineRecoveryDispositionRequestDto request,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            BaselineRecoveryCallCount++;
-            LastBaselineRecoveryRequest = request;
-            return ValueTask.FromResult(BaselineRecoveryResult);
         }
 
         public IAsyncEnumerable<ControlEventDto> WatchEventsAsync(

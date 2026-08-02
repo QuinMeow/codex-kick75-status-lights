@@ -32,9 +32,71 @@ public sealed class HostCoordinatorTests
 
         Assert.Equal(TaskVisualState.Thinking, coordinator.GetStatus().AggregateState);
         Assert.Equal(HookEnablementState.Enabled, coordinator.GetStatus().HookEnablement);
-        Assert.True(coordinator.GetStatus().Paused);
+        Assert.Equal(ApplicationLifecycleState.Paused, coordinator.GetStatus().LifecycleState);
         Assert.Equal([0x02, 0x64, 0x01, 0x00, 0x00, 0x00, 0x6B, 0xFF], transport.Writes[0]);
         Assert.Equal(baseline, transport.Writes[1]);
+    }
+
+    [Fact]
+    public async Task Pause_HooksContinueInMemory_ResumeAppliesOnlyLatestAggregate()
+    {
+        byte[] baseline = [0x00, 0x64, 0x01, 0x01, 0x00, 0xE9, 0xFF, 0xFB];
+        var transport = new MockLightingTransport(baseline);
+        await using var worker = new HidLightingWorker(
+            transport,
+            new InMemoryBaselineOwnershipStore());
+        worker.Start();
+        var coordinator = new HostCoordinator(new TaskStateReducer(), worker);
+
+        await coordinator.ApplyHookAsync(new CodexHookEvent(
+            CodexHookEventKind.UserPromptSubmit,
+            "session",
+            "turn"));
+        await coordinator.PauseAsync();
+        int writesAfterPause = transport.Writes.Count;
+
+        await coordinator.ApplyHookAsync(new CodexHookEvent(
+            CodexHookEventKind.Stop,
+            "session",
+            "turn"));
+
+        Assert.Equal(writesAfterPause, transport.Writes.Count);
+        Assert.Equal(TaskVisualState.Complete, coordinator.GetStatus().AggregateState);
+        Assert.Equal(ApplicationLifecycleState.Paused, coordinator.GetStatus().LifecycleState);
+
+        await coordinator.ResumeAsync();
+
+        Assert.Equal(ApplicationLifecycleState.Running, coordinator.GetStatus().LifecycleState);
+        Assert.Equal(
+            [0x02, 0x64, 0x01, 0x00, 0x00, 0x00, 0xFF, 0x00],
+            transport.Writes[^1]);
+        Assert.Equal(writesAfterPause + 1, transport.Writes.Count);
+    }
+
+    [Fact]
+    public async Task StopAsync_ConcurrentCallersShareOneRestoreAndOneTerminalResult()
+    {
+        byte[] baseline = [0x00, 0x64, 0x01, 0x01, 0x00, 0xE9, 0xFF, 0xFB];
+        var transport = new MockLightingTransport(baseline);
+        await using var worker = new HidLightingWorker(
+            transport,
+            new InMemoryBaselineOwnershipStore());
+        worker.Start();
+        var coordinator = new HostCoordinator(new TaskStateReducer(), worker);
+        await coordinator.ApplyHookAsync(new CodexHookEvent(
+            CodexHookEventKind.UserPromptSubmit,
+            "session",
+            "turn"));
+
+        Task<LifecycleStopResult> first = coordinator.StopAsync(LifecycleStopReason.NormalExit);
+        Task<LifecycleStopResult> second = coordinator.StopAsync(
+            LifecycleStopReason.PrepareUninstall);
+
+        Assert.Same(first, second);
+        LifecycleStopResult[] results = await Task.WhenAll(first, second);
+        Assert.All(results, result => Assert.True(result.Succeeded));
+        Assert.Equal(ApplicationLifecycleState.Stopped, coordinator.GetStatus().LifecycleState);
+        Assert.Equal(1, transport.Writes.Count(write => write.SequenceEqual(baseline)));
     }
 
     [Fact]
@@ -86,6 +148,30 @@ public sealed class HostCoordinatorTests
         Assert.Empty(transport.Writes);
     }
 
+    [Fact]
+    public async Task HandlePipeMessage_GoalBlocked_RemainsInterruptedUntilNextUserPrompt()
+    {
+        var transport = new MockLightingTransport([0x00, 0x64, 0x01, 0x01, 0x00, 0xE9, 0xFF, 0xFB]);
+        await using var worker = new HidLightingWorker(
+            transport,
+            new InMemoryBaselineOwnershipStore());
+        worker.Start();
+        var coordinator = new HostCoordinator(new TaskStateReducer(), worker);
+
+        Assert.Null(await coordinator.HandlePipeMessageAsync(
+            HookEnvelope(CodexHookEventKind.UserPromptSubmit, "session", "turn-1")));
+        Assert.Null(await coordinator.HandlePipeMessageAsync(
+            HookEnvelope(CodexHookEventKind.GoalBlocked, "session", "turn-1")));
+        Assert.Null(await coordinator.HandlePipeMessageAsync(
+            HookEnvelope(CodexHookEventKind.Stop, "session", "turn-1")));
+
+        Assert.Equal(TaskVisualState.Interrupted, coordinator.GetStatus().AggregateState);
+
+        Assert.Null(await coordinator.HandlePipeMessageAsync(
+            HookEnvelope(CodexHookEventKind.UserPromptSubmit, "session", "turn-2")));
+        Assert.Equal(TaskVisualState.Thinking, coordinator.GetStatus().AggregateState);
+    }
+
     [Theory]
     [InlineData("{\"kind\":0,\"kind\":0,\"sessionId\":\"session\",\"turnId\":\"turn\"}")]
     [InlineData("{\"kind\":0,\"sessionId\":\"first\",\"sessionId\":\"second\",\"turnId\":\"turn\"}")]
@@ -113,7 +199,7 @@ public sealed class HostCoordinatorTests
     }
 
     [Fact]
-    public async Task HandlePipeMessage_CorrelatedUserInput_RejectsUnrelatedPostAsResumeSignal()
+    public async Task HandlePipeMessage_PostToolUse_ResumesWaitingSession()
     {
         var transport = new MockLightingTransport([0x00, 0x64, 0x01, 0x01, 0x00, 0xE9, 0xFF, 0xFB]);
         await using var worker = new HidLightingWorker(
@@ -130,7 +216,6 @@ public sealed class HostCoordinatorTests
                 sessionId = "session",
                 turnId = "turn",
                 toolName = "request_user_input",
-                toolUseId = "ask-1",
             }));
         PipeEnvelope? unrelatedResponse = await coordinator.HandlePipeMessageAsync(PipeEnvelope.Create(
             PipeMessageKinds.HookEvent,
@@ -140,7 +225,6 @@ public sealed class HostCoordinatorTests
                 sessionId = "session",
                 turnId = "turn",
                 toolName = "shell_command",
-                toolUseId = "shell-1",
             }));
 
         Assert.Null(preResponse);
@@ -155,36 +239,10 @@ public sealed class HostCoordinatorTests
                 sessionId = "session",
                 turnId = "turn",
                 toolName = "request_user_input",
-                toolUseId = "ask-1",
             }));
 
         Assert.Null(matchingResponse);
         Assert.Equal(TaskVisualState.Thinking, coordinator.GetStatus().AggregateState);
-    }
-
-    [Fact]
-    public async Task HandlePipeMessage_PermissionRequestWithInventedToolUseId_IsRejected()
-    {
-        var transport = new MockLightingTransport([0x00, 0x64, 0x01, 0x01, 0x00, 0xE9, 0xFF, 0xFB]);
-        await using var worker = new HidLightingWorker(
-            transport,
-            new InMemoryBaselineOwnershipStore());
-        worker.Start();
-        var coordinator = new HostCoordinator(new TaskStateReducer(), worker);
-        PipeEnvelope envelope = PipeEnvelope.Create(PipeMessageKinds.HookEvent, new
-        {
-            kind = (int)CodexHookEventKind.PermissionRequest,
-            sessionId = "session",
-            turnId = "turn",
-            toolName = "shell_command",
-            toolUseId = "not-in-official-permission-payload",
-        });
-
-        PipeEnvelope? response = await coordinator.HandlePipeMessageAsync(envelope);
-
-        Assert.NotNull(response);
-        Assert.Equal(PipeMessageKinds.Rejected, response.Kind);
-        Assert.Equal(TaskVisualState.Idle, coordinator.GetStatus().AggregateState);
     }
 
     [Fact]
@@ -219,9 +277,8 @@ public sealed class HostCoordinatorTests
         Assert.Null(firstPermission);
         Assert.Null(secondPermission);
         Assert.Null(onePost);
-        // PermissionRequest carries no correlation ID in the official payload.
-        // The accepted boundary is one conservative latch per turn, so one
-        // PostToolUse clears concurrent indistinguishable permission requests.
+        // The reducer keeps one current state per session, so any accepted
+        // PostToolUse moves that session back to Thinking.
         Assert.Equal(TaskVisualState.Thinking, coordinator.GetStatus().AggregateState);
     }
 
@@ -241,7 +298,7 @@ public sealed class HostCoordinatorTests
             hardwareTest: hardwareTest);
         coordinator.StartEventProcessing();
         Task<HardwareTestCommandResult> blockedOperation = coordinator.RunHardwareTestAsync(
-            new HardwareTestArguments(HardwareTransportChoice.Usb)).AsTask();
+            new HardwareTestArguments()).AsTask();
         await hardwareTest.Started.WaitAsync(TimeSpan.FromSeconds(2));
 
         try
@@ -261,7 +318,7 @@ public sealed class HostCoordinatorTests
             }
 
             HostStatusSnapshot busy = coordinator.GetStatus();
-            Assert.Equal(turnCount, busy.ActiveTurnCount);
+            Assert.Equal(1, busy.ActiveSessionCount);
             Assert.Equal(TaskVisualState.Thinking, busy.AggregateState);
 
             PipeEnvelope sessionEnd = PipeEnvelope.Create(PipeMessageKinds.HookEvent, new
@@ -273,8 +330,7 @@ public sealed class HostCoordinatorTests
 
             Assert.Null(sessionEndResponse);
             HostStatusSnapshot ended = coordinator.GetStatus();
-            Assert.Equal(0, ended.ActiveTurnCount);
-            Assert.Equal(0, ended.SessionCount);
+            Assert.Equal(0, ended.ActiveSessionCount);
             Assert.Equal(TaskVisualState.Idle, ended.AggregateState);
         }
         finally
@@ -363,13 +419,13 @@ public sealed class HostCoordinatorTests
 
             Assert.NotNull(rejected);
             Assert.Equal(PipeMessageKinds.Rejected, rejected.Kind);
-            Assert.Equal(1, coordinator.GetStatus().ActiveTurnCount);
+            Assert.Equal(1, coordinator.GetStatus().ActiveSessionCount);
             Assert.False(stopTask.IsCompleted);
 
             transport.ReleaseFirstWrite();
             await stopTask.WaitAsync(TimeSpan.FromSeconds(2));
 
-            Assert.Equal(1, coordinator.GetStatus().ActiveTurnCount);
+            Assert.Equal(1, coordinator.GetStatus().ActiveSessionCount);
             Assert.Equal(thinking, Assert.Single(transport.Writes));
         }
         finally
@@ -510,6 +566,80 @@ public sealed class HostCoordinatorTests
         Assert.Equal(effective, reloaded);
         Assert.True(persistence.StartAtLogin);
         Assert.Equal(TimeSpan.FromSeconds(3600), persistence.Settings!.CompleteTtl);
+    }
+
+    [Fact]
+    public async Task CleanupAsync_CodexActiveKeepAwake_RewritesOnlyAfterConfiguredInterval()
+    {
+        byte[] baseline = [0x00, 0x64, 0x01, 0x01, 0x00, 0xE9, 0xFF, 0xFB];
+        var clock = new ManualTimeProvider();
+        var reducer = new TaskStateReducer(clock);
+        var transport = new MockLightingTransport(baseline);
+        await using var worker = new HidLightingWorker(
+            transport,
+            new InMemoryBaselineOwnershipStore(),
+            timeProvider: clock);
+        worker.Start();
+        var settings = new LightingSettings(
+            LightingSettings.Default.Thinking,
+            LightingSettings.Default.RequiresInput,
+            LightingSettings.Default.Complete,
+            LightingSettings.Default.Interrupted,
+            LightingSettings.Default.CompleteTtl,
+            new KeepAwakeSettings(
+                KeepAwakePolicy.WhileCodexActive,
+                KeepAwakeRegion.SideLightsOnly,
+                TimeSpan.FromSeconds(10)));
+        var coordinator = new HostCoordinator(
+            reducer,
+            worker,
+            settings,
+            timeProvider: clock);
+
+        await coordinator.ApplyHookAsync(new CodexHookEvent(
+            CodexHookEventKind.UserPromptSubmit,
+            "session",
+            "turn"));
+        await coordinator.CleanupAsync();
+        Assert.Single(transport.Writes);
+
+        clock.Advance(TimeSpan.FromSeconds(10));
+        await coordinator.CleanupAsync();
+
+        Assert.Equal(2, transport.Writes.Count);
+        Assert.Equal(transport.Writes[0], transport.Writes[1]);
+    }
+
+    [Fact]
+    public async Task CleanupAsync_HostRunningKeepAwake_IdlePulsesBaselineWithoutRetainingOwnership()
+    {
+        byte[] baseline = [0x00, 0x64, 0x01, 0x01, 0x00, 0xE9, 0xFF, 0xFB];
+        var clock = new ManualTimeProvider();
+        var transport = new MockLightingTransport(baseline);
+        var store = new InMemoryBaselineOwnershipStore();
+        await using var worker = new HidLightingWorker(transport, store, timeProvider: clock);
+        worker.Start();
+        var settings = new LightingSettings(
+            LightingSettings.Default.Thinking,
+            LightingSettings.Default.RequiresInput,
+            LightingSettings.Default.Complete,
+            LightingSettings.Default.Interrupted,
+            LightingSettings.Default.CompleteTtl,
+            new KeepAwakeSettings(
+                KeepAwakePolicy.WhileHostRunning,
+                KeepAwakeRegion.SideLightsOnly,
+                TimeSpan.FromSeconds(10)));
+        var coordinator = new HostCoordinator(
+            new TaskStateReducer(clock),
+            worker,
+            settings,
+            timeProvider: clock);
+
+        await coordinator.CleanupAsync();
+
+        Assert.Equal(baseline, Assert.Single(transport.Writes));
+        Assert.False((await store.LoadAsync())!.IsOwned);
+        Assert.Equal(LightingWorkerState.Idle, worker.Snapshot.State);
     }
 
     [Fact]
@@ -726,7 +856,7 @@ public sealed class HostCoordinatorTests
         Assert.Equal(thinking, Assert.Single(transport.Writes));
 
         HardwareTestCommandResult result = await coordinator.RunHardwareTestAsync(
-            new HardwareTestArguments(HardwareTransportChoice.Usb));
+            new HardwareTestArguments());
 
         Assert.True(result.Succeeded);
         Assert.Equal(LightingWorkerState.Paused, hardwareTest.ObservedWorkerState);

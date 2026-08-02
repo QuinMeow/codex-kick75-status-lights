@@ -133,6 +133,7 @@ public sealed class ConfigurationStore
             states,
             usesLegacyStateNames ? "completed" : "complete",
             defaults.Complete);
+        LightStyle interrupted = ReadStyle(states, "interrupted", defaults.Interrupted);
 
         TimeSpan completeTtl = TimeSpan.FromSeconds(ReadOptionalNumber(
             root,
@@ -143,10 +144,17 @@ public sealed class ConfigurationStore
             "staleSessionTtlMinutes",
             AgentKick75Configuration.Default.StaleSessionTtl.TotalMinutes));
         bool startAtLogin = ReadOptionalBoolean(root, "startAtLogin", defaultValue: false);
+        KeepAwakeSettings keepAwake = ReadKeepAwake(root);
 
         try
         {
-            var lighting = new LightingSettings(thinking, requiresInput, complete, completeTtl);
+            var lighting = new LightingSettings(
+                thinking,
+                requiresInput,
+                complete,
+                interrupted,
+                completeTtl,
+                keepAwake);
             return new AgentKick75Configuration(
                 lighting,
                 staleSessionTtl,
@@ -175,10 +183,17 @@ public sealed class ConfigurationStore
                 ["thinking"] = SerializeStyle(configuration.Lighting.Thinking),
                 ["requiresInput"] = SerializeStyle(configuration.Lighting.RequiresInput),
                 ["complete"] = SerializeStyle(configuration.Lighting.Complete),
+                ["interrupted"] = SerializeStyle(configuration.Lighting.Interrupted),
             },
             ["completeTtlSeconds"] = configuration.Lighting.CompleteTtl.TotalSeconds,
             ["staleSessionTtlMinutes"] = configuration.StaleSessionTtl.TotalMinutes,
             ["startAtLogin"] = configuration.StartAtLogin,
+            ["keepAwake"] = new JsonObject
+            {
+                ["policy"] = KeepAwakePolicyName(configuration.Lighting.KeepAwake.Policy),
+                ["region"] = "sideLights",
+                ["refreshIntervalSeconds"] = configuration.Lighting.KeepAwake.RefreshInterval.TotalSeconds,
+            },
         };
 
         return root.ToJsonString(SerializerOptions) + Environment.NewLine;
@@ -219,6 +234,13 @@ public sealed class ConfigurationStore
         int brightness = style["brightness"] is { } brightnessNode
             ? ReadInteger(brightnessNode, $"states.{propertyName}.brightness")
             : defaultValue.Brightness;
+        string effectText = ReadOptionalString(
+            style,
+            "effect",
+            EffectName(defaultValue.Effect));
+        int speed = style["speed"] is { } speedNode
+            ? ReadInteger(speedNode, $"states.{propertyName}.speed")
+            : defaultValue.Speed;
 
         if (!RgbColor.TryParse(colorText, out RgbColor color))
         {
@@ -229,14 +251,17 @@ public sealed class ConfigurationStore
 
         try
         {
-            return new LightStyle(color, brightness);
+            return new LightStyle(color, brightness, ParseEffect(effectText, propertyName), speed);
         }
         catch (ArgumentOutOfRangeException exception)
         {
-            throw new ConfigurationValidationException(
-                ConfigurationValidationError.InvalidBrightness,
-                $"states.{propertyName}.brightness must be between 0 and 100.",
-                exception);
+            ConfigurationValidationError error = exception.ParamName switch
+            {
+                "effect" => ConfigurationValidationError.InvalidEffect,
+                "speed" => ConfigurationValidationError.InvalidSpeed,
+                _ => ConfigurationValidationError.InvalidBrightness,
+            };
+            throw new ConfigurationValidationException(error, exception.Message, exception);
         }
     }
 
@@ -290,6 +315,45 @@ public sealed class ConfigurationStore
         throw InvalidDocument($"{propertyName} must be a boolean.");
     }
 
+    private static KeepAwakeSettings ReadKeepAwake(JsonObject root)
+    {
+        JsonObject? value = ReadOptionalObject(root, "keepAwake");
+        if (value is null)
+        {
+            return KeepAwakeSettings.Default;
+        }
+
+        string policyText = ReadOptionalString(value, "policy", "disabled");
+        string regionText = ReadOptionalString(value, "region", "sideLights");
+        double intervalSeconds = ReadOptionalNumber(
+            value,
+            "refreshIntervalSeconds",
+            KeepAwakeSettings.Default.RefreshInterval.TotalSeconds);
+
+        KeepAwakePolicy policy = policyText.ToLowerInvariant() switch
+        {
+            "disabled" => KeepAwakePolicy.Disabled,
+            "codexactive" => KeepAwakePolicy.WhileCodexActive,
+            "hostrunning" => KeepAwakePolicy.WhileHostRunning,
+            _ => throw InvalidDocument(
+                "keepAwake.policy must be disabled, codexActive, or hostRunning."),
+        };
+        KeepAwakeRegion region = regionText.ToLowerInvariant() switch
+        {
+            "sidelights" => KeepAwakeRegion.SideLightsOnly,
+            _ => throw InvalidDocument("keepAwake.region must be sideLights."),
+        };
+
+        try
+        {
+            return new KeepAwakeSettings(policy, region, TimeSpan.FromSeconds(intervalSeconds));
+        }
+        catch (ArgumentOutOfRangeException exception)
+        {
+            throw InvalidDocument(exception.Message, exception);
+        }
+    }
+
     private static double ReadOptionalNumber(
         JsonObject parent,
         string propertyName,
@@ -328,8 +392,39 @@ public sealed class ConfigurationStore
         {
             ["color"] = style.Color.ToString(),
             ["brightness"] = style.Brightness,
+            ["effect"] = EffectName(style.Effect),
+            ["speed"] = style.Speed,
         };
     }
+
+    private static SideLightEffect ParseEffect(string value, string propertyName)
+    {
+        return value.ToLowerInvariant() switch
+        {
+            "flowing" => SideLightEffect.Flowing,
+            "static" => SideLightEffect.Static,
+            "breathing" => SideLightEffect.Breathing,
+            _ => throw new ConfigurationValidationException(
+                ConfigurationValidationError.InvalidEffect,
+                $"states.{propertyName}.effect must be flowing, static, or breathing."),
+        };
+    }
+
+    private static string EffectName(SideLightEffect effect) => effect switch
+    {
+        SideLightEffect.Flowing => "flowing",
+        SideLightEffect.Static => "static",
+        SideLightEffect.Breathing => "breathing",
+        _ => throw new ArgumentOutOfRangeException(nameof(effect)),
+    };
+
+    private static string KeepAwakePolicyName(KeepAwakePolicy policy) => policy switch
+    {
+        KeepAwakePolicy.Disabled => "disabled",
+        KeepAwakePolicy.WhileCodexActive => "codexActive",
+        KeepAwakePolicy.WhileHostRunning => "hostRunning",
+        _ => throw new ArgumentOutOfRangeException(nameof(policy)),
+    };
 
     private static ConfigurationValidationException InvalidDocument(
         string message,

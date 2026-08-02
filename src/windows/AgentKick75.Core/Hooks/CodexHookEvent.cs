@@ -9,6 +9,7 @@ public enum CodexHookEventKind
     PreToolUse,
     PermissionRequest,
     PostToolUse,
+    GoalBlocked,
     Stop,
     SessionEnd,
 }
@@ -21,8 +22,7 @@ public sealed record CodexHookEvent(
     CodexHookEventKind Kind,
     string SessionId,
     string? TurnId = null,
-    string? ToolName = null,
-    string? ToolUseId = null)
+    string? ToolName = null)
 {
     public bool IsTurnScoped => Kind != CodexHookEventKind.SessionEnd;
 }

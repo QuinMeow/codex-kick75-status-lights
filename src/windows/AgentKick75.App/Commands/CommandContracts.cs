@@ -55,13 +55,6 @@ public sealed class GuardedHardwareTestCommand : IHardwareTestCommand
         ArgumentNullException.ThrowIfNull(arguments);
         var options = new HardwareTestOptions
         {
-            Transport = arguments.Transport switch
-            {
-                HardwareTransportChoice.Auto => HidTransportPreference.Auto,
-                HardwareTransportChoice.Usb => HidTransportPreference.Usb,
-                HardwareTransportChoice.Dongle => HidTransportPreference.Dongle,
-                _ => throw new ArgumentOutOfRangeException(nameof(arguments)),
-            },
             Cycles = arguments.Cycles,
             GreenDuration = arguments.GreenDuration,
         };

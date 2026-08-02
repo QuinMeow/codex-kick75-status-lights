@@ -35,13 +35,28 @@ public sealed class SideLightStateTests
     }
 
     [Fact]
-    public void CreateStaticColor_ValidStyle_ProducesProtocolEightByteState()
+    public void CreateStyle_ValidStaticStyle_ProducesProtocolEightByteState()
     {
         var style = new LightStyle(RgbColor.Parse("#123ABC"), 42);
 
-        SideLightState state = SideLightStateFactory.CreateStaticColor(style);
+        SideLightState state = SideLightStateFactory.CreateStyle(style);
 
         Assert.Equal(new byte[] { 0x02, 0x2A, 0x01, 0x00, 0x00, 0x12, 0x3A, 0xBC }, state.ToArray());
+    }
+
+    [Theory]
+    [InlineData(SideLightEffect.Flowing, 5, "0064050000123abc")]
+    [InlineData(SideLightEffect.Breathing, 1, "0364010000123abc")]
+    public void CreateStyle_OfficialDynamicEffect_PreservesModeAndSpeed(
+        SideLightEffect effect,
+        int speed,
+        string expectedHex)
+    {
+        var style = new LightStyle(RgbColor.Parse("#123ABC"), 100, effect, speed);
+
+        SideLightState state = SideLightStateFactory.CreateStyle(style);
+
+        Assert.Equal(expectedHex, state.ToString());
     }
 
     [Theory]
@@ -106,6 +121,7 @@ public sealed class SideLightStateTests
     [InlineData(TaskVisualState.Thinking, "0264010000006bff")]
     [InlineData(TaskVisualState.RequiresInput, "0264010000ffb400")]
     [InlineData(TaskVisualState.Complete, "026401000000ff00")]
+    [InlineData(TaskVisualState.Interrupted, "0264010000ff3b30")]
     public void Create_ActiveAggregateState_UsesValidatedDefaultStyle(
         TaskVisualState taskState,
         string expectedHex)

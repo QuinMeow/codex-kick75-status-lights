@@ -5,6 +5,7 @@ using AgentKick75.App.Diagnostics;
 using AgentKick75.App.Hosting;
 using AgentKick75.App.Hooks;
 using AgentKick75.App.Ipc;
+using AgentKick75.App.Installation;
 using AgentKick75.App.Lighting;
 using AgentKick75.App.Tray;
 using AgentKick75.App.Web;
@@ -30,6 +31,8 @@ internal static class Program
                     Console.Out)
                 .GetAwaiter()
                 .GetResult(),
+            AppCommandKind.Install => RunInstall(),
+            AppCommandKind.Uninstall => RunUninstall(),
             AppCommandKind.HardwareTest => RunHardwareTest(command.HardwareTest!),
             AppCommandKind.Help => WriteUsage(Console.Out, null, 0),
             _ => WriteUsage(Console.Error, command.Error, 2),
@@ -47,6 +50,7 @@ internal static class Program
         {
             ApplicationConfiguration.Initialize();
             string dataDirectory = EnsureUserDataDirectory();
+            string appExecutablePath = Path.Combine(AppContext.BaseDirectory, "AgentKick75.exe");
             string hookExecutablePath = Path.Combine(
                 AppContext.BaseDirectory,
                 "AgentKick75.Hook.exe");
@@ -63,12 +67,16 @@ internal static class Program
                 .GetAwaiter()
                 .GetResult();
             AgentKick75Configuration configuration = configurationLoad.Configuration;
+            var startupManager = new StartupRegistrationManager();
             SanitizedDiagnosticLog? diagnosticLog = TryCreateDiagnosticLog(dataDirectory);
             TryWriteConfigurationLoaded(diagnosticLog, configurationLoad.Status);
             var baselineStore = new BaselineStore(Path.Combine(dataDirectory, "baseline.json"));
+            var restoreStore = new LightingRestoreStore(Path.Combine(
+                dataDirectory,
+                "lighting-restore.json"));
             var worker = new HidLightingWorker(
                 WindowsLightingTransport.CreateDefault(),
-                new FileBaselineOwnershipStore(baselineStore));
+                new FileBaselineOwnershipStore(restoreStore));
             var coordinator = new HostCoordinator(
                 new TaskStateReducer(
                     completeTtl: configuration.Lighting.CompleteTtl,
@@ -76,9 +84,13 @@ internal static class Program
                 worker,
                 configuration.Lighting,
                 GuardedHardwareTestCommand.CreateWindowsDefault(baselineStore),
-                new CoreHostSettingsPersistence(configurationStore, configuration),
+                new CoreHostSettingsPersistence(
+                    configurationStore,
+                    configuration,
+                    enabled => startupManager.SetEnabled(enabled, appExecutablePath)),
                 configuration.StartAtLogin,
-                diagnosticLog);
+                diagnosticLog,
+                ApplicationLifecycleState.Starting);
             TryInstallCodexIntegration(
                 hookRegistrationManager,
                 notificationRegistrationManager,
@@ -97,7 +109,19 @@ internal static class Program
 
             try
             {
-                runtime.Start();
+                try
+                {
+                    runtime.Start();
+                }
+                catch (Exception)
+                {
+                    MessageBox.Show(
+                        "无法恢复键盘原灯效。程序已停止，未启动托盘、控制页或 Hook 接收。",
+                        "AgentKick75",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                    return 3;
+                }
                 try
                 {
                     controlServer = AgentKick75ControlServer.StartAsync(
@@ -134,6 +158,80 @@ internal static class Program
                 }
             }
         }
+    }
+
+    private static int RunInstall()
+    {
+        string dataDirectory = EnsureUserDataDirectory();
+        CreateInstallationServices(
+            dataDirectory,
+            out string appExecutablePath,
+            out string hookExecutablePath,
+            out HookRegistrationManager hookManager,
+            out CodexNotificationRegistrationManager notificationManager,
+            out StartupRegistrationManager startupManager,
+            out ConfigurationStore configurationStore,
+            out _);
+        return InstallationCommand.InstallAsync(
+                appExecutablePath,
+                hookExecutablePath,
+                hookManager,
+                notificationManager,
+                startupManager,
+                configurationStore,
+                Console.Out)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static int RunUninstall()
+    {
+        string dataDirectory = EnsureUserDataDirectory();
+        CreateInstallationServices(
+            dataDirectory,
+            out string appExecutablePath,
+            out _,
+            out HookRegistrationManager hookManager,
+            out CodexNotificationRegistrationManager notificationManager,
+            out StartupRegistrationManager startupManager,
+            out ConfigurationStore configurationStore,
+            out LightingRestoreStore restoreStore);
+        return InstallationCommand.UninstallAsync(
+                appExecutablePath,
+                hookManager,
+                notificationManager,
+                startupManager,
+                configurationStore,
+                restoreStore,
+                new NamedPipeRequestClient(),
+                Console.Out)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static void CreateInstallationServices(
+        string dataDirectory,
+        out string appExecutablePath,
+        out string hookExecutablePath,
+        out HookRegistrationManager hookManager,
+        out CodexNotificationRegistrationManager notificationManager,
+        out StartupRegistrationManager startupManager,
+        out ConfigurationStore configurationStore,
+        out LightingRestoreStore restoreStore)
+    {
+        string codexDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".codex");
+        appExecutablePath = Path.Combine(AppContext.BaseDirectory, "AgentKick75.exe");
+        hookExecutablePath = Path.Combine(AppContext.BaseDirectory, "AgentKick75.Hook.exe");
+        hookManager = new HookRegistrationManager(Path.Combine(codexDirectory, "hooks.json"));
+        notificationManager = new CodexNotificationRegistrationManager(
+            Path.Combine(codexDirectory, "config.toml"));
+        startupManager = new StartupRegistrationManager();
+        configurationStore = new ConfigurationStore(Path.Combine(dataDirectory, "config.json"));
+        restoreStore = new LightingRestoreStore(Path.Combine(
+            dataDirectory,
+            "lighting-restore.json"));
     }
 
     private static void TryInstallCodexIntegration(

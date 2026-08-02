@@ -78,6 +78,8 @@ public enum ConfigurationValidationError
     UnsupportedSchemaVersion,
     InvalidColor,
     InvalidBrightness,
+    InvalidEffect,
+    InvalidSpeed,
     InvalidCompleteTtl,
     InvalidStaleSessionTtl,
     InvalidDocument,

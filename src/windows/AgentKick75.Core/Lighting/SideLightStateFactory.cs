@@ -4,18 +4,15 @@ namespace AgentKick75.Core.Lighting;
 
 public static class SideLightStateFactory
 {
-    private const byte StaticColorMode = 0x02;
-    private const byte DefaultSpeed = 0x01;
-
-    public static SideLightState CreateStaticColor(LightStyle style)
+    public static SideLightState CreateStyle(LightStyle style)
     {
         ArgumentNullException.ThrowIfNull(style);
 
         return new SideLightState(
         [
-            StaticColorMode,
+            (byte)style.Effect,
             style.Brightness,
-            DefaultSpeed,
+            style.Speed,
             0x00,
             0x00,
             style.Color.Red,
@@ -38,9 +35,10 @@ public static class SideLightStateFactory
         return taskState switch
         {
             TaskVisualState.Idle => null,
-            TaskVisualState.Thinking => CreateStaticColor(settings.Thinking),
-            TaskVisualState.RequiresInput => CreateStaticColor(settings.RequiresInput),
-            TaskVisualState.Complete => CreateStaticColor(settings.Complete),
+            TaskVisualState.Thinking => CreateStyle(settings.Thinking),
+            TaskVisualState.RequiresInput => CreateStyle(settings.RequiresInput),
+            TaskVisualState.Complete => CreateStyle(settings.Complete),
+            TaskVisualState.Interrupted => CreateStyle(settings.Interrupted),
             _ => throw new ArgumentOutOfRangeException(nameof(taskState)),
         };
     }

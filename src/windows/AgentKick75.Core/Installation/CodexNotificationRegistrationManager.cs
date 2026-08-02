@@ -64,6 +64,68 @@ public sealed partial class CodexNotificationRegistrationManager
         }
     }
 
+    public async Task<CodexNotificationRegistrationResult> UninstallAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!File.Exists(ConfigPath))
+            {
+                return new CodexNotificationRegistrationResult(false, false);
+            }
+
+            string original = await File.ReadAllTextAsync(ConfigPath, cancellationToken)
+                .ConfigureAwait(false);
+            Match match = NotifyLineRegex().Match(original);
+            if (!match.Success)
+            {
+                return new CodexNotificationRegistrationResult(false, false);
+            }
+
+            string[] existing = ParseArray(match.Groups[1].Value);
+            if (!IsAgentKick75Notify(existing))
+            {
+                return new CodexNotificationRegistrationResult(false, false);
+            }
+
+            int forwardIndex = Array.IndexOf(existing, "--forward");
+            string updated;
+            if (forwardIndex >= 0 && forwardIndex + 1 < existing.Length)
+            {
+                string[] forwarded = existing[(forwardIndex + 1)..];
+                string notifyLine = $"notify = {JsonSerializer.Serialize(forwarded)}";
+                updated = original[..match.Index] + notifyLine + original[(match.Index + match.Length)..];
+            }
+            else
+            {
+                int removeLength = match.Length;
+                if (match.Index + removeLength < original.Length &&
+                    original.AsSpan(match.Index + removeLength).StartsWith("\r\n"))
+                {
+                    removeLength += 2;
+                }
+                else if (match.Index + removeLength < original.Length &&
+                         original[match.Index + removeLength] == '\n')
+                {
+                    removeLength++;
+                }
+
+                updated = original.Remove(match.Index, removeLength);
+            }
+
+            string backupPath = CreateBackupPath();
+            File.Copy(ConfigPath, backupPath, overwrite: false);
+            await AtomicFile.WriteUtf8Async(ConfigPath, updated, cancellationToken)
+                .ConfigureAwait(false);
+            return new CodexNotificationRegistrationResult(true, false, backupPath);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     private static string[] BuildCommand(string hookExecutablePath, string[] existing)
     {
         if (IsAgentKick75Notify(existing))

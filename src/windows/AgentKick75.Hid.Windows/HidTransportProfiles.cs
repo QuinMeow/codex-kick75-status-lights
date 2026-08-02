@@ -5,9 +5,7 @@ public sealed record HidTransportProfile(
     string Id,
     ushort VendorId,
     ushort ProductId,
-    HidTransportPreference Transport,
-    HidProfileSupport Support,
-    int AutoPriority)
+    HidProfileSupport Support)
 {
     public const ushort Kick75VendorId = 0x19F5;
     public const ushort RawHidUsagePage = 0x0001;
@@ -41,33 +39,25 @@ public static class HidTransportProfiles
         "kick75-usb",
         HidTransportProfile.Kick75VendorId,
         0x1026,
-        HidTransportPreference.Usb,
-        HidProfileSupport.Writable,
-        AutoPriority: 0);
+        HidProfileSupport.Writable);
 
     public static HidTransportProfile Kick75U1Dongle { get; } = new(
         "kick75-u1-dongle",
         HidTransportProfile.Kick75VendorId,
         0x2620,
-        HidTransportPreference.Dongle,
-        HidProfileSupport.DiagnosticOnly,
-        AutoPriority: 1);
+        HidProfileSupport.DiagnosticOnly);
 
     public static HidTransportProfile Kick75HighDiagnostic { get; } = new(
         "kick75-high-diagnostic",
         HidTransportProfile.Kick75VendorId,
         0x1027,
-        HidTransportPreference.Usb,
-        HidProfileSupport.DiagnosticOnly,
-        AutoPriority: int.MaxValue - 1);
+        HidProfileSupport.DiagnosticOnly);
 
     public static HidTransportProfile U1BootloaderExcluded { get; } = new(
         "u1-bootloader-excluded",
         HidTransportProfile.Kick75VendorId,
         0x1020,
-        HidTransportPreference.Dongle,
-        HidProfileSupport.Excluded,
-        AutoPriority: int.MaxValue);
+        HidProfileSupport.Excluded);
 
     public static IReadOnlyList<HidTransportProfile> Known { get; } =
         Array.AsReadOnly(
@@ -88,7 +78,5 @@ public static class HidTransportProfiles
             "unsupported",
             device.VendorId,
             device.ProductId,
-            HidTransportPreference.Auto,
-            HidProfileSupport.Unsupported,
-            int.MaxValue);
+            HidProfileSupport.Unsupported);
 }

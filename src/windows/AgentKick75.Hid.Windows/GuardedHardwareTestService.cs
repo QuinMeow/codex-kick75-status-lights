@@ -12,8 +12,6 @@ public enum HardwareTestOutcome
 
 public sealed record HardwareTestOptions
 {
-    public HidTransportPreference Transport { get; init; } = HidTransportPreference.Auto;
-
     public TimeSpan GreenDuration { get; init; } = TimeSpan.FromSeconds(5);
 
     public TimeSpan CommandTimeout { get; init; } = Kick75HidProtocolClient.DefaultCommandTimeout;
@@ -161,7 +159,7 @@ public sealed class GuardedHardwareTestService
         HidDeviceSelection selection;
         try
         {
-            selection = selector.Select(enumerator.Enumerate(), options.Transport);
+            selection = selector.Select(enumerator.Enumerate());
         }
         catch (Exception exception)
         {
@@ -177,24 +175,11 @@ public sealed class GuardedHardwareTestService
                 Array.Empty<HardwareTestCycleResult>());
         }
 
-        if (selection.Profile is not null &&
-            selection.Profile != HidTransportProfiles.Kick75Usb)
-        {
-            return CreateResult(
-                HardwareTestOutcome.NoGo,
-                selection,
-                "No-Go: guarded side-light writes are currently restricted to the Kick75 USB profile; " +
-                "dongle and diagnostic identities are read-only.",
-                Array.Empty<HardwareTestCycleResult>());
-        }
-
         if (!selection.IsWritable)
         {
             string noGoReason = selection.Candidates
                 .FirstOrDefault(candidate =>
-                    candidate.Profile.Support == HidProfileSupport.Writable &&
-                    (options.Transport == HidTransportPreference.Auto ||
-                        candidate.Profile.Transport == options.Transport))?.Reason ?? selection.Message;
+                    candidate.Profile == HidTransportProfiles.Kick75Usb)?.Reason ?? selection.Message;
             return CreateResult(
                 HardwareTestOutcome.NoGo,
                 selection,
@@ -235,9 +220,7 @@ public sealed class GuardedHardwareTestService
             }
             catch (TimeoutException exception)
             {
-                finalState = selection.Profile?.Transport == HidTransportPreference.Dongle
-                    ? HidDeviceState.ReceiverPresent
-                    : HidDeviceState.Unresponsive;
+                finalState = HidDeviceState.Unresponsive;
                 cycle = FailedBeforeBaseline(cycleNumber, finalState, exception);
             }
             catch (Exception exception)

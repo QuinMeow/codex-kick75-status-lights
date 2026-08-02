@@ -357,8 +357,6 @@ public sealed class Kick75HidProtocolClient : IKick75LightingTransport
             OperationCanceledException => State,
             HidDeviceDisconnectedException => HidDeviceState.Disconnected,
             HidDeviceBusyException => HidDeviceState.Busy,
-            TimeoutException when Device.ProductId == HidTransportProfiles.Kick75U1Dongle.ProductId =>
-                HidDeviceState.ReceiverPresent,
             TimeoutException => HidDeviceState.Unresponsive,
             Kick75ProtocolException => HidDeviceState.Unresponsive,
             _ => HidDeviceState.Faulted,

@@ -18,7 +18,7 @@ public sealed class PipeStatusPrivacyTests
         [0x02, 0x64, 0x01, 0x00, 0x00, 0x00, 0x6B, 0xFF];
 
     [Fact]
-    public async Task HandlePipeMessage_StatusResponse_RedactsDeviceAndMismatchIdentities()
+    public async Task HandlePipeMessage_StatusResponse_RedactsDeviceIdentity()
     {
         const string observedIdentity = "19F5:1026/path=private-hid-path";
         const string baselineIdentity = "19F5:1026/serial=private-baseline-serial";
@@ -48,13 +48,9 @@ public sealed class PipeStatusPrivacyTests
         await worker.SetSideLightAsync(Thinking);
         var coordinator = new HostCoordinator(new TaskStateReducer(), worker);
 
-        BaselineIdentityMismatchNotice internalMismatch =
-            Assert.IsType<BaselineIdentityMismatchNotice>(worker.Snapshot.BaselineMismatch);
         Assert.Equal(observedIdentity, worker.Snapshot.DeviceIdentity);
         Assert.Null(worker.Snapshot.DescriptorMetadata?.Product);
         Assert.Null(worker.Snapshot.DescriptorMetadata?.Manufacturer);
-        Assert.Equal(baselineIdentity, internalMismatch.BaselineDeviceIdentity);
-        Assert.Equal(observedIdentity, internalMismatch.ObservedDeviceIdentity);
 
         PipeEnvelope? response = await coordinator.HandlePipeMessageAsync(
             PipeEnvelope.Create(PipeMessageKinds.StatusRequest, new { }));
@@ -63,24 +59,13 @@ public sealed class PipeStatusPrivacyTests
         Assert.Equal(PipeMessageKinds.StatusResponse, response.Kind);
         JsonElement lighting = response.Payload.GetProperty("lighting");
         Assert.Equal("19F5:1026", lighting.GetProperty("deviceIdentity").GetString());
-        JsonElement mismatch = lighting.GetProperty("baselineMismatch");
-        Assert.Equal(
-            "19F5:1026",
-            mismatch.GetProperty("baselineDeviceIdentity").GetString());
-        Assert.Equal(
-            "19F5:1026",
-            mismatch.GetProperty("observedDeviceIdentity").GetString());
         string pipeJson = response.Payload.GetRawText();
-        Assert.DoesNotContain(internalMismatch.ConfirmationId, pipeJson, StringComparison.Ordinal);
-        Assert.False(mismatch.TryGetProperty("confirmationId", out _));
+        Assert.False(lighting.TryGetProperty("baselineMismatch", out _));
         AssertContainsNoPrivateIdentity(pipeJson);
 
         // Boundary redaction must not mutate the identities required for the
         // worker's in-process recovery safety decision.
         Assert.Equal(observedIdentity, worker.Snapshot.DeviceIdentity);
-        Assert.Equal(
-            baselineIdentity,
-            worker.Snapshot.BaselineMismatch?.BaselineDeviceIdentity);
     }
 
     [Fact]
@@ -100,20 +85,11 @@ public sealed class PipeStatusPrivacyTests
         Assert.Equal(JsonValueKind.Null, lighting.GetProperty("deviceIdentity").ValueKind);
         Assert.Equal(JsonValueKind.Null, lighting.GetProperty("transportProfile").ValueKind);
         Assert.Equal(JsonValueKind.Null, lighting.GetProperty("interfaceFingerprint").ValueKind);
-        JsonElement mismatch = lighting.GetProperty("baselineMismatch");
-        Assert.Equal(
-            JsonValueKind.Null,
-            mismatch.GetProperty("baselineDeviceIdentity").ValueKind);
-        Assert.Equal(
-            "19F5:1026",
-            mismatch.GetProperty("observedDeviceIdentity").GetString());
-        Assert.Equal(JsonValueKind.Null, mismatch.GetProperty("transportProfile").ValueKind);
-        Assert.Equal(JsonValueKind.Null, mismatch.GetProperty("interfaceFingerprint").ValueKind);
+        Assert.False(lighting.TryGetProperty("baselineMismatch", out _));
         Assert.DoesNotContain(
             "00112233445566778899aabbccddeeff",
             consoleJson,
             StringComparison.Ordinal);
-        Assert.False(mismatch.TryGetProperty("confirmationId", out _));
         AssertContainsNoPrivateIdentity(consoleJson);
     }
 
@@ -136,12 +112,12 @@ public sealed class PipeStatusPrivacyTests
     {
         return new HostStatusSnapshot(
             host,
-            Paused: false,
+            ApplicationLifecycleState.Running,
+            FaultCode: null,
             IsPreviewActive: false,
             HookEnablementState.Enabled,
             TaskVisualState.Idle,
-            ActiveTurnCount: 0,
-            SessionCount: 0,
+            ActiveSessionCount: 0,
             LastEventAtUtc: null,
             new LightingWorkerSnapshot(
                 LightingWorkerState.Faulted,
@@ -152,14 +128,7 @@ public sealed class PipeStatusPrivacyTests
                 DateTimeOffset.UtcNow,
                 "19F5:1026/0001:0000/in=65/out=65/path=private-fingerprint",
                 LightingDeviceObservationKind.Descriptor,
-                LightingDeviceSupport.Writable,
-                new BaselineIdentityMismatchNotice(
-                    "00112233445566778899aabbccddeeff",
-                    "serial=private-baseline-serial",
-                    "19F5:1026/serial=private-observed-serial",
-                    "kick75-usb/serial=private-mismatch-profile",
-                    "19F5:1026/0001:0000/in=65/out=65/serial=private-mismatch-fingerprint",
-                    DateTimeOffset.UtcNow)));
+                LightingDeviceSupport.Writable));
     }
 
     private static void AssertContainsNoPrivateIdentity(string json)

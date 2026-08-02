@@ -185,18 +185,6 @@ public sealed class ControlPageEventStreamTimeoutTests
             throw new NotSupportedException();
         }
 
-        public ValueTask RestoreOriginalLightingAsync(CancellationToken cancellationToken)
-        {
-            throw new NotSupportedException();
-        }
-
-        public ValueTask<HardwareTestResultDto> RunHardwareTestAsync(
-            HardwareTestRequestDto request,
-            CancellationToken cancellationToken)
-        {
-            throw new NotSupportedException();
-        }
-
         public IAsyncEnumerable<ControlEventDto> WatchEventsAsync(
             CancellationToken cancellationToken)
         {

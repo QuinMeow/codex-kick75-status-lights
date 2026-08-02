@@ -18,14 +18,39 @@ public enum HookEnablementState
     Disabled,
 }
 
+public enum ApplicationLifecycleState
+{
+    Starting,
+    Running,
+    Paused,
+    Stopping,
+    Faulted,
+    Stopped,
+}
+
+public enum LifecycleFaultCode
+{
+    ProtocolError,
+    RestoreFailed,
+    StartupRecoveryFailed,
+}
+
+public enum LifecycleStopReason
+{
+    NormalExit,
+    PrepareUninstall,
+}
+
+public sealed record LifecycleStopResult(bool Succeeded, LifecycleFaultCode? FaultCode = null);
+
 public sealed record HostStatusSnapshot(
     string Host,
-    bool Paused,
+    ApplicationLifecycleState LifecycleState,
+    LifecycleFaultCode? FaultCode,
     bool IsPreviewActive,
     HookEnablementState HookEnablement,
     TaskVisualState AggregateState,
-    int ActiveTurnCount,
-    int SessionCount,
+    int ActiveSessionCount,
     DateTimeOffset? LastEventAtUtc,
     LightingWorkerSnapshot Lighting);
 
@@ -44,13 +69,15 @@ public sealed class HostCoordinator
     private readonly IHardwareTestCommand hardwareTest;
     private readonly IHostSettingsPersistence settingsPersistence;
     private readonly ISanitizedDiagnosticLog? diagnosticLog;
+    private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim reconcileGate = new(1, 1);
     private readonly Channel<bool> hookReconcileRequests;
     private readonly object hookLifecycleGate = new();
     private readonly object stateGate = new();
     private LightingSettings lightingSettings;
     private bool startAtLogin;
-    private bool paused;
+    private ApplicationLifecycleState lifecycleState;
+    private LifecycleFaultCode? faultCode;
     private bool previewActive;
     private int previewGeneration;
     private HookEnablementState hookEnablement;
@@ -59,6 +86,9 @@ public sealed class HostCoordinator
     private TaskCompletionSource<bool>? hookStopCompletion;
     private TaskCompletionSource<bool>? inlineHooksDrained;
     private int inlineHookCount;
+    private Lazy<Task<LifecycleStopResult>>? stopOperation;
+    private TaskVisualState lastCoordinatedAggregate = TaskVisualState.Idle;
+    private DateTimeOffset? lastKeepAwakeRefreshAt;
 
     public HostCoordinator(
         TaskStateReducer reducer,
@@ -67,7 +97,9 @@ public sealed class HostCoordinator
         IHardwareTestCommand? hardwareTest = null,
         IHostSettingsPersistence? settingsPersistence = null,
         bool startAtLogin = false,
-        ISanitizedDiagnosticLog? diagnosticLog = null)
+        ISanitizedDiagnosticLog? diagnosticLog = null,
+        ApplicationLifecycleState initialLifecycleState = ApplicationLifecycleState.Running,
+        TimeProvider? timeProvider = null)
     {
         this.reducer = reducer ?? throw new ArgumentNullException(nameof(reducer));
         this.lightingWorker = lightingWorker ?? throw new ArgumentNullException(nameof(lightingWorker));
@@ -79,6 +111,8 @@ public sealed class HostCoordinator
         this.settingsPersistence = settingsPersistence ?? new NullHostSettingsPersistence();
         this.startAtLogin = startAtLogin;
         this.diagnosticLog = diagnosticLog;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+        lifecycleState = initialLifecycleState;
         // Hook events are reduced synchronously at the trusted Host boundary so
         // lifecycle transitions can never be lost to queue pressure. Physical
         // reconciliation is represented only by a capacity-one wake-up signal:
@@ -95,6 +129,68 @@ public sealed class HostCoordinator
     }
 
     public event EventHandler<HostStatusSnapshot>? StatusChanged;
+
+    public event EventHandler? ShutdownRequested;
+
+    public void MarkRunning()
+    {
+        lock (stateGate)
+        {
+            if (lifecycleState != ApplicationLifecycleState.Starting)
+            {
+                throw new InvalidOperationException("Only a starting Host can enter Running.");
+            }
+
+            lifecycleState = ApplicationLifecycleState.Running;
+            faultCode = null;
+        }
+
+        PublishStatus();
+    }
+
+    public void MarkStopped()
+    {
+        lock (stateGate)
+        {
+            lifecycleState = ApplicationLifecycleState.Stopped;
+        }
+    }
+
+    public void MarkStartupFault()
+    {
+        lock (stateGate)
+        {
+            if (lifecycleState == ApplicationLifecycleState.Starting)
+            {
+                lifecycleState = ApplicationLifecycleState.Faulted;
+                faultCode = LifecycleFaultCode.StartupRecoveryFailed;
+            }
+        }
+
+        PublishStatus();
+    }
+
+    public void NotifyPrepareUninstallResponseFlushed()
+    {
+        EventHandler? handlers = ShutdownRequested;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, EventArgs.Empty);
+            }
+            catch (Exception)
+            {
+                // The restore transaction and response are already complete.
+                // One UI observer must not terminate the pipe listener.
+            }
+        }
+    }
 
     public void StartEventProcessing()
     {
@@ -193,6 +289,7 @@ public sealed class HostCoordinator
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(hookEvent);
+        EnsureHookAdmission();
         ApplyHookState(hookEvent);
         await ReconcileLightingAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -200,7 +297,64 @@ public sealed class HostCoordinator
     public async ValueTask CleanupAsync(CancellationToken cancellationToken = default)
     {
         reducer.CleanupStale();
-        await ReconcileLightingAsync(cancellationToken, probeConnection: true).ConfigureAwait(false);
+        TaskStateSnapshot current = reducer.Snapshot();
+        ApplicationLifecycleState lifecycle;
+        bool isPreviewActive;
+        lock (stateGate)
+        {
+            lifecycle = lifecycleState;
+            isPreviewActive = previewActive;
+        }
+
+        if (lifecycle != ApplicationLifecycleState.Running || isPreviewActive)
+        {
+            return;
+        }
+
+        if (current.AggregateState != lastCoordinatedAggregate)
+        {
+            await ReconcileLightingAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            LightingSettings settings;
+            DateTimeOffset? lastRefresh;
+            lock (stateGate)
+            {
+                settings = lightingSettings;
+                lastRefresh = lastKeepAwakeRefreshAt;
+            }
+
+            DateTimeOffset now = timeProvider.GetUtcNow();
+            bool refreshDue = settings.KeepAwake.Policy != KeepAwakePolicy.Disabled &&
+                (lastRefresh is null || now - lastRefresh >= settings.KeepAwake.RefreshInterval);
+
+            if (refreshDue && current.AggregateState != TaskVisualState.Idle)
+            {
+                await lightingWorker.RefreshDesiredSideLightAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                lock (stateGate)
+                {
+                    lastKeepAwakeRefreshAt = now;
+                }
+            }
+            else if (refreshDue && settings.KeepAwake.Policy == KeepAwakePolicy.WhileHostRunning)
+            {
+                await lightingWorker.PulseCurrentSideLightAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                lock (stateGate)
+                {
+                    lastKeepAwakeRefreshAt = now;
+                }
+            }
+            else if (current.AggregateState != TaskVisualState.Idle)
+            {
+                await lightingWorker.ProbeAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            PromoteWorkerFaultIfNeeded();
+            PublishStatus();
+        }
     }
 
     public async ValueTask PauseAsync(CancellationToken cancellationToken = default)
@@ -210,12 +364,21 @@ public sealed class HostCoordinator
         {
             lock (stateGate)
             {
-                paused = true;
+                RequireLifecycle(ApplicationLifecycleState.Running);
+                lifecycleState = ApplicationLifecycleState.Paused;
                 previewActive = false;
                 previewGeneration++;
             }
 
-            await lightingWorker.PauseAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await lightingWorker.QuiesceAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                SetFault(LifecycleFaultCode.RestoreFailed);
+                throw;
+            }
         }
         finally
         {
@@ -230,13 +393,12 @@ public sealed class HostCoordinator
         await reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            bool wasPaused;
             lock (stateGate)
             {
-                wasPaused = paused;
+                RequireLifecycle(ApplicationLifecycleState.Paused);
             }
 
-            if (wasPaused)
+            try
             {
                 // Stage the newest aggregate target while both Host and worker
                 // remain paused. Commit the visible Host state only after the
@@ -244,15 +406,35 @@ public sealed class HostCoordinator
                 await StageLatestTargetOnPausedWorkerUnderGateAsync(cancellationToken)
                     .ConfigureAwait(false);
                 await lightingWorker.ResumeAsync(cancellationToken).ConfigureAwait(false);
+                PromoteWorkerFaultIfNeeded();
                 lock (stateGate)
                 {
-                    paused = false;
+                    if (lifecycleState == ApplicationLifecycleState.Paused)
+                    {
+                        lifecycleState = ApplicationLifecycleState.Running;
+                        faultCode = null;
+                    }
+                    else if (lifecycleState == ApplicationLifecycleState.Faulted)
+                    {
+                        throw new InvalidOperationException(
+                            "The HID worker faulted while lighting takeover was resuming.");
+                    }
                 }
             }
-            else
+            catch
             {
-                await ReconcileLatestLightingUnderGateAsync(cancellationToken)
-                    .ConfigureAwait(false);
+                bool alreadyFaulted;
+                lock (stateGate)
+                {
+                    alreadyFaulted = lifecycleState == ApplicationLifecycleState.Faulted;
+                }
+
+                if (!alreadyFaulted)
+                {
+                    SetFault(LifecycleFaultCode.RestoreFailed);
+                }
+
+                throw;
             }
         }
         finally
@@ -263,57 +445,65 @@ public sealed class HostCoordinator
         PublishStatus();
     }
 
-    public async ValueTask<BaselineMismatchRecoveryResult> AbandonMismatchedBaselineAsync(
-        string confirmationId,
-        bool confirmed,
+    public Task<LifecycleStopResult> StopAsync(
+        LifecycleStopReason reason,
         CancellationToken cancellationToken = default)
     {
-        await reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        BaselineMismatchRecoveryResult result;
-        try
+        Lazy<Task<LifecycleStopResult>> operation;
+        lock (stateGate)
         {
-            result = await lightingWorker.AbandonMismatchedBaselineAsync(
-                confirmationId,
-                confirmed,
-                cancellationToken).ConfigureAwait(false);
-            if (result.Succeeded)
-            {
-                lock (stateGate)
-                {
-                    paused = true;
-                    previewActive = false;
-                    previewGeneration++;
-                }
-            }
-        }
-        finally
-        {
-            reconcileGate.Release();
+            stopOperation ??= new Lazy<Task<LifecycleStopResult>>(
+                () => StopCoreAsync(reason),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            operation = stopOperation;
         }
 
-        PublishStatus();
-        return result;
+        Task<LifecycleStopResult> task = operation.Value;
+        return cancellationToken.CanBeCanceled ? task.WaitAsync(cancellationToken) : task;
     }
 
-    public async ValueTask RestoreAsync(CancellationToken cancellationToken = default)
+    private async Task<LifecycleStopResult> StopCoreAsync(LifecycleStopReason reason)
     {
-        await reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        _ = reason;
+        lock (stateGate)
         {
-            lock (stateGate)
-            {
-                previewActive = false;
-                previewGeneration++;
-            }
-
-            await lightingWorker.RestoreAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            reconcileGate.Release();
+            lifecycleState = ApplicationLifecycleState.Stopping;
+            faultCode = null;
+            previewActive = false;
+            previewGeneration++;
         }
 
         PublishStatus();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await StopEventProcessingAsync().AsTask().WaitAsync(deadline.Token)
+                .ConfigureAwait(false);
+            await reconcileGate.WaitAsync(deadline.Token).ConfigureAwait(false);
+            try
+            {
+                await lightingWorker.QuiesceAsync(deadline.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                reconcileGate.Release();
+            }
+
+            lock (stateGate)
+            {
+                lifecycleState = ApplicationLifecycleState.Stopped;
+            }
+
+            PublishStatus();
+
+            return new LifecycleStopResult(true);
+        }
+        catch (Exception exception) when (exception is not StackOverflowException)
+        {
+            lightingWorker.RequestCancellation();
+            SetFault(LifecycleFaultCode.RestoreFailed, force: true);
+            return new LifecycleStopResult(false, LifecycleFaultCode.RestoreFailed);
+        }
     }
 
     public async ValueTask PreviewAsync(
@@ -342,10 +532,7 @@ public sealed class HostCoordinator
                 LightingSettings settings;
                 lock (stateGate)
                 {
-                    if (paused)
-                    {
-                        throw new InvalidOperationException("Lighting takeover is paused.");
-                    }
+                    RequireLifecycle(ApplicationLifecycleState.Running);
 
                     previewActive = true;
                     generation = ++previewGeneration;
@@ -398,6 +585,14 @@ public sealed class HostCoordinator
         bool effectiveStartAtLogin;
         lock (stateGate)
         {
+            if (lifecycleState is ApplicationLifecycleState.Starting or
+                ApplicationLifecycleState.Stopping or
+                ApplicationLifecycleState.Faulted or
+                ApplicationLifecycleState.Stopped)
+            {
+                throw new InvalidOperationException("Settings cannot change in the current lifecycle state.");
+            }
+
             effectiveStartAtLogin = newStartAtLogin ?? startAtLogin;
         }
 
@@ -410,6 +605,7 @@ public sealed class HostCoordinator
         {
             lightingSettings = settings;
             startAtLogin = effectiveStartAtLogin;
+            lastKeepAwakeRefreshAt = null;
         }
 
         await ReconcileLightingAsync(cancellationToken).ConfigureAwait(false);
@@ -422,13 +618,12 @@ public sealed class HostCoordinator
     {
         ArgumentNullException.ThrowIfNull(arguments);
         await reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        bool wasPaused = false;
         bool quiesceAttempted = false;
         try
         {
             lock (stateGate)
             {
-                wasPaused = paused;
+                RequireLifecycle(ApplicationLifecycleState.Running);
                 if (previewActive)
                 {
                     return new HardwareTestCommandResult(
@@ -452,10 +647,10 @@ public sealed class HostCoordinator
                 bool shouldResume;
                 lock (stateGate)
                 {
-                    shouldResume = !paused;
+                    shouldResume = lifecycleState == ApplicationLifecycleState.Running;
                 }
 
-                if (quiesceAttempted && !wasPaused && shouldResume)
+                if (quiesceAttempted && shouldResume)
                 {
                     // Reducer state may have changed while the physical test held the
                     // gate. Stage the newest target while paused, then resume once.
@@ -467,11 +662,7 @@ public sealed class HostCoordinator
                     }
                     catch
                     {
-                        lock (stateGate)
-                        {
-                            paused = true;
-                        }
-
+                        SetFault(LifecycleFaultCode.RestoreFailed);
                         throw;
                     }
                 }
@@ -509,6 +700,16 @@ public sealed class HostCoordinator
                     PipeMessageKinds.StatusResponse,
                     PipeStatusResponseDto.FromInternal(GetStatus()));
 
+            case PipeMessageKinds.PrepareUninstallRequest:
+                LifecycleStopResult result = await StopAsync(
+                    LifecycleStopReason.PrepareUninstall,
+                    cancellationToken).ConfigureAwait(false);
+                return result.Succeeded
+                    ? PipeEnvelope.Create(PipeMessageKinds.Accepted, new { })
+                    : PipeEnvelope.Create(
+                        PipeMessageKinds.Rejected,
+                        new { reason = "restore-failed", faultCode = result.FaultCode?.ToString() });
+
             default:
                 WriteDiagnostic(
                     SanitizedDiagnosticEventType.ControlRequestRejected,
@@ -518,8 +719,7 @@ public sealed class HostCoordinator
     }
 
     private async ValueTask<TaskStateSnapshot> ReconcileLightingAsync(
-        CancellationToken cancellationToken,
-        bool probeConnection = false)
+        CancellationToken cancellationToken)
     {
         TaskStateSnapshot task;
         await reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -527,10 +727,12 @@ public sealed class HostCoordinator
         {
             task = await ReconcileLatestLightingUnderGateAsync(cancellationToken)
                 .ConfigureAwait(false);
-            if (probeConnection)
-            {
-                await lightingWorker.ProbeAsync(cancellationToken).ConfigureAwait(false);
-            }
+        }
+        catch
+        {
+            PromoteWorkerFaultIfNeeded();
+            PublishStatus();
+            throw;
         }
         finally
         {
@@ -538,6 +740,7 @@ public sealed class HostCoordinator
         }
 
         PublishStatus();
+        PromoteWorkerFaultIfNeeded();
         return task;
     }
 
@@ -556,10 +759,24 @@ public sealed class HostCoordinator
                 }
             }
 
-            if (shouldReplay)
+            bool running;
+            lock (stateGate)
             {
-                await ReconcileLatestLightingUnderGateAsync(CancellationToken.None)
-                    .ConfigureAwait(false);
+                running = lifecycleState == ApplicationLifecycleState.Running;
+            }
+
+            if (shouldReplay && running)
+            {
+                try
+                {
+                    await ReconcileLatestLightingUnderGateAsync(CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    PromoteWorkerFaultIfNeeded();
+                    throw;
+                }
             }
         }
         finally
@@ -576,17 +793,17 @@ public sealed class HostCoordinator
         CancellationToken cancellationToken)
     {
         TaskStateSnapshot task = reducer.Snapshot();
-        bool isPaused;
+        ApplicationLifecycleState lifecycle;
         bool isPreviewActive;
         LightingSettings settings;
         lock (stateGate)
         {
-            isPaused = paused;
+            lifecycle = lifecycleState;
             isPreviewActive = previewActive;
             settings = lightingSettings;
         }
 
-        if (isPaused || isPreviewActive)
+        if (lifecycle != ApplicationLifecycleState.Running || isPreviewActive)
         {
             return task;
         }
@@ -599,7 +816,13 @@ public sealed class HostCoordinator
         else
         {
             await lightingWorker.SetSideLightAsync(target.Bytes, cancellationToken).ConfigureAwait(false);
+            lock (stateGate)
+            {
+                lastKeepAwakeRefreshAt = timeProvider.GetUtcNow();
+            }
         }
+
+        lastCoordinatedAggregate = task.AggregateState;
 
         return task;
     }
@@ -694,6 +917,17 @@ public sealed class HostCoordinator
         CodexHookEvent hookEvent,
         CancellationToken cancellationToken)
     {
+        lock (stateGate)
+        {
+            if (lifecycleState is not (ApplicationLifecycleState.Running or
+                ApplicationLifecycleState.Paused))
+            {
+                return PipeEnvelope.Create(
+                    PipeMessageKinds.Rejected,
+                    new { reason = "host-stopping" });
+            }
+        }
+
         bool reconcileInline = false;
         lock (hookLifecycleGate)
         {
@@ -721,7 +955,6 @@ public sealed class HostCoordinator
                         hookReconcileRequests.Writer.TryComplete();
                         WriteDiagnostic(
                             SanitizedDiagnosticEventType.HookRejected,
-                            hookEvent.SessionId,
                             code: SanitizedDiagnosticCode.HostUnavailable);
                         return PipeEnvelope.Create(
                             PipeMessageKinds.Rejected,
@@ -756,7 +989,6 @@ public sealed class HostCoordinator
                 case HookProcessingLifecycle.Stopped:
                     WriteDiagnostic(
                         SanitizedDiagnosticEventType.HookRejected,
-                        hookEvent.SessionId,
                         code: SanitizedDiagnosticCode.HostUnavailable);
                     return PipeEnvelope.Create(
                         PipeMessageKinds.Rejected,
@@ -854,6 +1086,18 @@ public sealed class HostCoordinator
         }
     }
 
+    private void EnsureHookAdmission()
+    {
+        lock (stateGate)
+        {
+            if (lifecycleState is not (ApplicationLifecycleState.Running or
+                ApplicationLifecycleState.Paused))
+            {
+                throw new InvalidOperationException("The Host is not accepting Hook events.");
+            }
+        }
+    }
+
     private void WriteDiagnostic(
         SanitizedDiagnosticEventType eventType,
         string? sessionId = null,
@@ -899,6 +1143,70 @@ public sealed class HostCoordinator
         }
     }
 
+    private void RequireLifecycle(ApplicationLifecycleState expected)
+    {
+        if (lifecycleState != expected)
+        {
+            throw new InvalidOperationException(
+                $"This operation requires lifecycle {expected}; current state is {lifecycleState}.");
+        }
+    }
+
+    private void SetFault(LifecycleFaultCode code, bool force = false)
+    {
+        bool changed = false;
+        lock (stateGate)
+        {
+            if (!force && lifecycleState is (
+                    ApplicationLifecycleState.Stopping or
+                    ApplicationLifecycleState.Stopped))
+            {
+                return;
+            }
+
+            lifecycleState = ApplicationLifecycleState.Faulted;
+            faultCode = code;
+            previewActive = false;
+            previewGeneration++;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            PublishStatus();
+        }
+    }
+
+    private void PromoteWorkerFaultIfNeeded()
+    {
+        LightingWorkerSnapshot lighting = lightingWorker.Snapshot;
+        if (lighting.State != LightingWorkerState.Faulted)
+        {
+            return;
+        }
+
+        bool changed = false;
+        lock (stateGate)
+        {
+            if (lifecycleState is ApplicationLifecycleState.Running or
+                ApplicationLifecycleState.Paused)
+            {
+                lifecycleState = ApplicationLifecycleState.Faulted;
+                faultCode = lighting.LastFailure == LightingTransportFailureKind.BaselineMismatch
+                    ? LifecycleFaultCode.RestoreFailed
+                    : LifecycleFaultCode.ProtocolError;
+                previewActive = false;
+                previewGeneration++;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            PublishStatus();
+        }
+    }
+
     private void PublishStatus()
     {
         TaskStateSnapshot current = reducer.Snapshot();
@@ -932,12 +1240,12 @@ public sealed class HostCoordinator
     {
         return new HostStatusSnapshot(
             "online",
-            paused,
+            lifecycleState,
+            faultCode,
             previewActive,
             hookEnablement,
             task.AggregateState,
-            task.TrackedTurnCount,
-            task.SessionCount,
+            task.ActiveSessionCount,
             task.LastEventAtUtc,
             lightingWorker.Snapshot);
     }
@@ -956,7 +1264,6 @@ public sealed class HostCoordinator
             "sessionId",
             "turnId",
             "toolName",
-            "toolUseId",
         };
         var seen = new HashSet<string>(StringComparer.Ordinal);
         bool hasKind = false;
@@ -1001,23 +1308,14 @@ public sealed class HostCoordinator
             return false;
         }
 
-        bool toolUseIdAllowed = hook.Kind is CodexHookEventKind.PreToolUse or
-            CodexHookEventKind.PostToolUse;
-        if (hook.ToolUseId is not null &&
-            (!toolUseIdAllowed || !IsIdentifier(hook.ToolUseId)))
-        {
-            hook = null;
-            return false;
-        }
-
         if (hook.Kind == CodexHookEventKind.SessionEnd &&
-            (hook.TurnId is not null || hook.ToolName is not null || hook.ToolUseId is not null))
+            (hook.TurnId is not null || hook.ToolName is not null))
         {
             hook = null;
             return false;
         }
 
-        if (!toolRequired && (hook.ToolName is not null || hook.ToolUseId is not null))
+        if (!toolRequired && hook.ToolName is not null)
         {
             hook = null;
             return false;

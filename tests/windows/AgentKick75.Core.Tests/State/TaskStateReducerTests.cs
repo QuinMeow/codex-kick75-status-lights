@@ -29,7 +29,7 @@ public sealed class TaskStateReducerTests
         TaskStateSnapshot expired = reducer.Snapshot();
 
         Assert.Equal(TaskVisualState.Idle, expired.AggregateState);
-        Assert.Empty(expired.Turns);
+        Assert.Empty(expired.Sessions);
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public sealed class TaskStateReducerTests
 
         Assert.Equal(TimeSpan.FromSeconds(4), reducer.CompleteTtl);
         Assert.Equal(TaskVisualState.Idle, snapshot.AggregateState);
-        Assert.Empty(snapshot.Turns);
+        Assert.Empty(snapshot.Sessions);
     }
 
     [Fact]
@@ -66,6 +66,33 @@ public sealed class TaskStateReducerTests
     }
 
     [Fact]
+    public void Apply_GoalBlocked_HoldsInterruptedUntilNextUserPromptAndIgnoresStop()
+    {
+        var clock = new ManualTimeProvider();
+        var reducer = new TaskStateReducer(
+            clock,
+            completeTtl: TimeSpan.FromSeconds(10),
+            staleTimeout: TimeSpan.FromMinutes(30));
+        reducer.Apply(Event(CodexHookEventKind.UserPromptSubmit));
+
+        TaskStateSnapshot blocked = reducer.Apply(Event(CodexHookEventKind.GoalBlocked));
+        TaskStateSnapshot afterStop = reducer.Apply(Event(CodexHookEventKind.Stop));
+        clock.Advance(TimeSpan.FromHours(2));
+
+        Assert.Equal(TaskVisualState.Interrupted, blocked.AggregateState);
+        Assert.Equal(TaskVisualState.Interrupted, afterStop.AggregateState);
+        Assert.Equal(TaskVisualState.Interrupted, reducer.Snapshot().AggregateState);
+
+        TaskStateSnapshot resumed = reducer.Apply(Event(
+            CodexHookEventKind.UserPromptSubmit,
+            turnId: "turn-2"));
+
+        Assert.Equal(TaskVisualState.Thinking, resumed.AggregateState);
+        Assert.Single(resumed.Sessions);
+        Assert.Equal("turn-2", resumed.Sessions[0].LastTurnId);
+    }
+
+    [Fact]
     public void Apply_PermissionThenPostToolUse_ReturnsToThinkingWithoutReadingToolPayload()
     {
         var reducer = new TaskStateReducer(new ManualTimeProvider());
@@ -82,52 +109,22 @@ public sealed class TaskStateReducerTests
     }
 
     [Fact]
-    public void Apply_UnrelatedPostWhileCorrelatedUserInputPending_PreservesRequiresInput()
-    {
-        var reducer = new TaskStateReducer(new ManualTimeProvider());
-        reducer.Apply(Event(CodexHookEventKind.UserPromptSubmit));
-        reducer.Apply(Event(
-            CodexHookEventKind.PreToolUse,
-            toolName: "request_user_input",
-            toolUseId: "ask-1"));
-
-        TaskStateSnapshot unrelatedPost = reducer.Apply(Event(
-            CodexHookEventKind.PostToolUse,
-            toolName: "shell_command",
-            toolUseId: "shell-1"));
-        TaskStateSnapshot matchingPost = reducer.Apply(Event(
-            CodexHookEventKind.PostToolUse,
-            toolName: "request_user_input",
-            toolUseId: "ask-1"));
-
-        Assert.Equal(TaskVisualState.RequiresInput, unrelatedPost.AggregateState);
-        Assert.Equal(TaskVisualState.Thinking, matchingPost.AggregateState);
-    }
-
-    [Fact]
-    public void Apply_TwoCorrelatedUserInputs_RequiresEveryMatchingPostBeforeThinking()
+    public void Apply_UnrelatedPostWhileInputPending_PreservesRequiresInput()
     {
         var reducer = new TaskStateReducer(new ManualTimeProvider());
         reducer.Apply(Event(
             CodexHookEventKind.PreToolUse,
-            toolName: "request_user_input",
-            toolUseId: "ask-1"));
-        reducer.Apply(Event(
-            CodexHookEventKind.PreToolUse,
-            toolName: "request_user_input",
-            toolUseId: "ask-2"));
+            toolName: "request_user_input"));
 
-        TaskStateSnapshot onePending = reducer.Apply(Event(
+        TaskStateSnapshot unrelated = reducer.Apply(Event(
             CodexHookEventKind.PostToolUse,
-            toolName: "request_user_input",
-            toolUseId: "ask-2"));
-        TaskStateSnapshot nonePending = reducer.Apply(Event(
+            toolName: "shell_command"));
+        TaskStateSnapshot matching = reducer.Apply(Event(
             CodexHookEventKind.PostToolUse,
-            toolName: "request_user_input",
-            toolUseId: "ask-1"));
+            toolName: "request_user_input"));
 
-        Assert.Equal(TaskVisualState.RequiresInput, onePending.AggregateState);
-        Assert.Equal(TaskVisualState.Thinking, nonePending.AggregateState);
+        Assert.Equal(TaskVisualState.RequiresInput, unrelated.AggregateState);
+        Assert.Equal(TaskVisualState.Thinking, matching.AggregateState);
     }
 
     [Fact]
@@ -145,8 +142,8 @@ public sealed class TaskStateReducerTests
             "shell_command"));
 
         Assert.Equal(TaskVisualState.RequiresInput, requiresInput.AggregateState);
-        Assert.Equal(3, requiresInput.TrackedTurnCount);
-        Assert.Equal(3, requiresInput.SessionCount);
+        Assert.Equal(3, requiresInput.Sessions.Count);
+        Assert.Equal(2, requiresInput.ActiveSessionCount);
 
         TaskStateSnapshot afterWaitingEnds = reducer.Apply(SessionEnd("waiting"));
         Assert.Equal(TaskVisualState.Thinking, afterWaitingEnds.AggregateState);
@@ -159,6 +156,121 @@ public sealed class TaskStateReducerTests
     }
 
     [Fact]
+    public void Apply_StopWhileAnotherSessionThinks_PreservesPendingInputPriority()
+    {
+        var reducer = new TaskStateReducer(new ManualTimeProvider());
+        reducer.Apply(Event(
+            CodexHookEventKind.UserPromptSubmit,
+            "thinking",
+            "thinking-turn"));
+        reducer.Apply(Event(
+            CodexHookEventKind.PreToolUse,
+            "waiting",
+            "waiting-turn",
+            "request_user_input"));
+
+        TaskStateSnapshot yielded = reducer.Apply(Event(
+            CodexHookEventKind.Stop,
+            "waiting",
+            "notification-turn"));
+        TaskStateSnapshot otherCompleted = reducer.Apply(Event(
+            CodexHookEventKind.Stop,
+            "thinking",
+            "thinking-turn"));
+
+        Assert.Equal(TaskVisualState.RequiresInput, yielded.AggregateState);
+        Assert.Equal(TaskVisualState.RequiresInput, otherCompleted.AggregateState);
+        Assert.Equal(1, otherCompleted.ActiveSessionCount);
+
+        reducer.Apply(Event(
+            CodexHookEventKind.PostToolUse,
+            "waiting",
+            "waiting-turn",
+            "request_user_input"));
+        TaskStateSnapshot completed = reducer.Apply(Event(
+            CodexHookEventKind.Stop,
+            "waiting",
+            "final-turn"));
+
+        Assert.Equal(TaskVisualState.Complete, completed.AggregateState);
+        Assert.Equal(2, completed.Sessions.Count);
+        Assert.All(
+            completed.Sessions,
+            session => Assert.Equal(TaskVisualState.Complete, session.State));
+    }
+
+    [Fact]
+    public void Apply_LateToolEventsAfterStop_DoNotResurrectThinking()
+    {
+        var clock = new ManualTimeProvider();
+        var reducer = new TaskStateReducer(
+            clock,
+            completeTtl: TimeSpan.FromSeconds(2));
+        reducer.Apply(Event(CodexHookEventKind.UserPromptSubmit));
+        reducer.Apply(Event(CodexHookEventKind.Stop));
+
+        TaskStateSnapshot latePost = reducer.Apply(Event(
+            CodexHookEventKind.PostToolUse,
+            turnId: "late-turn",
+            toolName: "shell_command"));
+
+        Assert.Equal(TaskVisualState.Complete, latePost.AggregateState);
+
+        clock.Advance(TimeSpan.FromSeconds(3));
+        TaskStateSnapshot muchLaterPost = reducer.Apply(Event(
+            CodexHookEventKind.PostToolUse,
+            turnId: "much-later-turn",
+            toolName: "shell_command"));
+
+        Assert.Equal(TaskVisualState.Idle, muchLaterPost.AggregateState);
+        Assert.Empty(muchLaterPost.Sessions);
+
+        TaskStateSnapshot resumed = reducer.Apply(Event(
+            CodexHookEventKind.UserPromptSubmit,
+            turnId: "next-turn"));
+
+        Assert.Equal(TaskVisualState.Thinking, resumed.AggregateState);
+        Assert.Single(resumed.Sessions);
+    }
+
+    [Fact]
+    public void Apply_UserPromptAfterRequiresInput_ClearsPreviousTurnWait()
+    {
+        var reducer = new TaskStateReducer(new ManualTimeProvider());
+        reducer.Apply(Event(
+            CodexHookEventKind.PreToolUse,
+            turnId: "waiting-turn",
+            toolName: "request_user_input"));
+
+        TaskStateSnapshot answered = reducer.Apply(Event(
+            CodexHookEventKind.UserPromptSubmit,
+            turnId: "answer-turn"));
+
+        SessionStateEntry active = Assert.Single(answered.Sessions);
+        Assert.Equal(TaskVisualState.Thinking, answered.AggregateState);
+        Assert.Equal("answer-turn", active.LastTurnId);
+    }
+
+    [Fact]
+    public void Apply_PostWithDifferentTurnId_ClearsPreviousTurnWait()
+    {
+        var reducer = new TaskStateReducer(new ManualTimeProvider());
+        reducer.Apply(Event(
+            CodexHookEventKind.PreToolUse,
+            turnId: "waiting-turn",
+            toolName: "request_user_input"));
+
+        TaskStateSnapshot answered = reducer.Apply(Event(
+            CodexHookEventKind.PostToolUse,
+            turnId: "result-turn",
+            toolName: "request_user_input"));
+
+        SessionStateEntry active = Assert.Single(answered.Sessions);
+        Assert.Equal(TaskVisualState.Thinking, answered.AggregateState);
+        Assert.Equal("result-turn", active.LastTurnId);
+    }
+
+    [Fact]
     public void Apply_SameTurnIdInDifferentSessions_TracksIndependentKeys()
     {
         var reducer = new TaskStateReducer(new ManualTimeProvider());
@@ -167,9 +279,9 @@ public sealed class TaskStateReducerTests
         reducer.Apply(Event(CodexHookEventKind.UserPromptSubmit, "session-b", "same-turn"));
         TaskStateSnapshot afterOneSessionEnds = reducer.Apply(SessionEnd("session-a"));
 
-        TaskStateEntry remaining = Assert.Single(afterOneSessionEnds.Turns);
-        Assert.Equal("session-b", remaining.Key.SessionId);
-        Assert.Equal("same-turn", remaining.Key.TurnId);
+        SessionStateEntry remaining = Assert.Single(afterOneSessionEnds.Sessions);
+        Assert.Equal("session-b", remaining.SessionId);
+        Assert.Equal("same-turn", remaining.LastTurnId);
     }
 
     [Fact]
@@ -188,13 +300,13 @@ public sealed class TaskStateReducerTests
             "session",
             "stop-turn"));
 
-        TaskStateEntry completed = Assert.Single(snapshot.Turns);
+        SessionStateEntry completed = Assert.Single(snapshot.Sessions);
         Assert.Equal(TaskVisualState.Complete, snapshot.AggregateState);
-        Assert.Equal("stop-turn", completed.Key.TurnId);
+        Assert.Equal("stop-turn", completed.LastTurnId);
     }
 
     [Fact]
-    public void Apply_SessionEnd_RemovesAllTurnsOnlyForThatSession()
+    public void Apply_SessionEnd_RemovesOnlyThatSession()
     {
         var reducer = new TaskStateReducer(new ManualTimeProvider());
         reducer.Apply(Event(CodexHookEventKind.UserPromptSubmit, "session-a", "turn-1"));
@@ -203,9 +315,9 @@ public sealed class TaskStateReducerTests
 
         TaskStateSnapshot snapshot = reducer.Apply(SessionEnd("session-a"));
 
-        TaskStateEntry remaining = Assert.Single(snapshot.Turns);
-        Assert.Equal("session-b", remaining.Key.SessionId);
-        Assert.Equal(1, snapshot.SessionCount);
+        SessionStateEntry remaining = Assert.Single(snapshot.Sessions);
+        Assert.Equal("session-b", remaining.SessionId);
+        Assert.Equal(1, snapshot.ActiveSessionCount);
     }
 
     [Fact]
@@ -225,8 +337,8 @@ public sealed class TaskStateReducerTests
 
         TaskStateSnapshot snapshot = reducer.CleanupStale();
 
-        TaskStateEntry remaining = Assert.Single(snapshot.Turns);
-        Assert.Equal("fresh", remaining.Key.SessionId);
+        SessionStateEntry remaining = Assert.Single(snapshot.Sessions);
+        Assert.Equal("fresh", remaining.SessionId);
         Assert.Equal(TaskVisualState.Thinking, snapshot.AggregateState);
     }
 
@@ -270,10 +382,9 @@ public sealed class TaskStateReducerTests
         CodexHookEventKind kind,
         string sessionId = "session-1",
         string turnId = "turn-1",
-        string? toolName = null,
-        string? toolUseId = null)
+        string? toolName = null)
     {
-        return new CodexHookEvent(kind, sessionId, turnId, toolName, toolUseId);
+        return new CodexHookEvent(kind, sessionId, turnId, toolName);
     }
 
     private static CodexHookEvent SessionEnd(string sessionId)

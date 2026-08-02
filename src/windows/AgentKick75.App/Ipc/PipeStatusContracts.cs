@@ -16,12 +16,12 @@ namespace AgentKick75.App.Ipc;
 /// </summary>
 public sealed record PipeStatusResponseDto(
     string Host,
-    bool Paused,
+    ApplicationLifecycleState LifecycleState,
+    LifecycleFaultCode? FaultCode,
     bool IsPreviewActive,
     HookEnablementState HookEnablement,
     TaskVisualState AggregateState,
-    int ActiveTurnCount,
-    int SessionCount,
+    int ActiveSessionCount,
     DateTimeOffset? LastEventAtUtc,
     PipeLightingStatusDto Lighting)
 {
@@ -30,12 +30,12 @@ public sealed record PipeStatusResponseDto(
         ArgumentNullException.ThrowIfNull(status);
         return new PipeStatusResponseDto(
             PipeStatusPrivacy.SafeHost(status.Host) ?? "unavailable",
-            status.Paused,
+            status.LifecycleState,
+            status.FaultCode,
             status.IsPreviewActive,
             status.HookEnablement,
             status.AggregateState,
-            status.ActiveTurnCount,
-            status.SessionCount,
+            status.ActiveSessionCount,
             status.LastEventAtUtc,
             PipeLightingStatusDto.FromInternal(status.Lighting));
     }
@@ -95,8 +95,7 @@ public sealed record PipeLightingStatusDto(
     DateTimeOffset UpdatedAtUtc,
     string? InterfaceFingerprint,
     LightingDeviceObservationKind DeviceObservation,
-    LightingDeviceSupport? DeviceSupport,
-    PipeBaselineMismatchStatusDto? BaselineMismatch)
+    LightingDeviceSupport? DeviceSupport)
 {
     internal static PipeLightingStatusDto FromInternal(LightingWorkerSnapshot lighting)
     {
@@ -110,8 +109,7 @@ public sealed record PipeLightingStatusDto(
             lighting.UpdatedAtUtc,
             PipeStatusPrivacy.SafeInterfaceFingerprint(lighting.InterfaceFingerprint),
             lighting.DeviceObservation,
-            lighting.DeviceSupport,
-            PipeBaselineMismatchStatusDto.FromInternal(lighting.BaselineMismatch));
+            lighting.DeviceSupport);
     }
 
     internal PipeLightingStatusDto Sanitize()
@@ -119,42 +117,6 @@ public sealed record PipeLightingStatusDto(
         return this with
         {
             DeviceIdentity = PipeStatusPrivacy.ToVidPidOrNull(DeviceIdentity),
-            TransportProfile = PipeStatusPrivacy.SafeTransportProfile(TransportProfile),
-            InterfaceFingerprint = PipeStatusPrivacy.SafeInterfaceFingerprint(
-                InterfaceFingerprint),
-            BaselineMismatch = BaselineMismatch?.Sanitize(),
-        };
-    }
-}
-
-public sealed record PipeBaselineMismatchStatusDto(
-    string? BaselineDeviceIdentity,
-    string? ObservedDeviceIdentity,
-    string? TransportProfile,
-    string? InterfaceFingerprint,
-    DateTimeOffset ObservedAtUtc)
-{
-    internal static PipeBaselineMismatchStatusDto? FromInternal(
-        BaselineIdentityMismatchNotice? mismatch)
-    {
-        return mismatch is null
-            ? null
-            : new PipeBaselineMismatchStatusDto(
-                PipeStatusPrivacy.ToVidPidOrNull(mismatch.BaselineDeviceIdentity),
-                PipeStatusPrivacy.ToVidPidOrNull(mismatch.ObservedDeviceIdentity),
-                PipeStatusPrivacy.SafeTransportProfile(mismatch.TransportProfile),
-                PipeStatusPrivacy.SafeInterfaceFingerprint(mismatch.InterfaceFingerprint),
-                mismatch.ObservedAtUtc);
-    }
-
-    internal PipeBaselineMismatchStatusDto Sanitize()
-    {
-        return this with
-        {
-            BaselineDeviceIdentity = PipeStatusPrivacy.ToVidPidOrNull(
-                BaselineDeviceIdentity),
-            ObservedDeviceIdentity = PipeStatusPrivacy.ToVidPidOrNull(
-                ObservedDeviceIdentity),
             TransportProfile = PipeStatusPrivacy.SafeTransportProfile(TransportProfile),
             InterfaceFingerprint = PipeStatusPrivacy.SafeInterfaceFingerprint(
                 InterfaceFingerprint),

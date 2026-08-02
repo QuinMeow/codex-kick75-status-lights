@@ -31,12 +31,6 @@ public interface IControlPlane
         bool isPaused,
         CancellationToken cancellationToken);
 
-    ValueTask RestoreOriginalLightingAsync(CancellationToken cancellationToken);
-
-    ValueTask<HardwareTestResultDto> RunHardwareTestAsync(
-        HardwareTestRequestDto request,
-        CancellationToken cancellationToken);
-
     ValueTask<HookInstallationResultDto> InstallCodexHooksAsync(
         CancellationToken cancellationToken) =>
         ValueTask.FromResult(new HookInstallationResultDto(
@@ -46,14 +40,6 @@ public interface IControlPlane
             "unavailable",
             "当前主程序不支持安装 Codex Hook。"));
 
-    ValueTask<BaselineRecoveryDispositionDto> AbandonMismatchedBaselineAsync(
-        BaselineRecoveryDispositionRequestDto request,
-        CancellationToken cancellationToken) =>
-        ValueTask.FromResult(new BaselineRecoveryDispositionDto(
-            false,
-            "unavailable",
-            "Baseline mismatch disposition is unavailable."));
-
     IAsyncEnumerable<ControlEventDto> WatchEventsAsync(CancellationToken cancellationToken);
 }
 
@@ -62,17 +48,18 @@ public enum ControlPreviewState
     Thinking,
     RequiresInput,
     Complete,
+    Interrupted,
 }
 
 public sealed record ControlStatusDto(
     string AggregateState,
     int ActiveSessionCount,
     DateTimeOffset? LastEventAt,
-    bool IsPaused,
+    string LifecycleState,
+    string? FaultCode,
     bool IsPreviewActive,
     string HookStatus,
-    DeviceDiagnosticsDto Device,
-    BaselineRecoveryRiskDto? BaselineRecovery = null);
+    DeviceDiagnosticsDto Device);
 
 public sealed record DeviceDiagnosticsDto(
     string Model,
@@ -85,45 +72,29 @@ public sealed record DeviceDiagnosticsDto(
     string? LastErrorCode,
     string? InterfaceFingerprint = null);
 
-public sealed record ControlLightStyleDto(string Color, int Brightness);
+public sealed record ControlLightStyleDto(
+    string Color,
+    int Brightness,
+    string Effect = "static",
+    int Speed = 1);
 
 public sealed record ControlSettingsDto(
     ControlLightStyleDto Thinking,
     ControlLightStyleDto RequiresInput,
     ControlLightStyleDto Complete,
     int CompleteHoldSeconds,
-    bool LaunchAtSignIn);
+    bool LaunchAtSignIn,
+    ControlLightStyleDto? Interrupted = null,
+    string KeepAwakePolicy = "disabled",
+    int KeepAwakeRefreshSeconds = 60,
+    string KeepAwakeRegion = "sideLights");
 
 public sealed record PauseRequestDto(bool Paused);
-
-public sealed record HardwareTestRequestDto(string Transport);
-
-public sealed record HardwareTestResultDto(
-    bool Succeeded,
-    string Status,
-    string Message,
-    string? Transport);
 
 public sealed record HookInstallationResultDto(
     bool Succeeded,
     bool Changed,
     int RegisteredHandlerCount,
-    string Status,
-    string Message);
-
-public sealed record BaselineRecoveryRiskDto(
-    string Code,
-    string ConfirmationId,
-    string Message,
-    string? BaselineDeviceIdentity,
-    string? ObservedDeviceIdentity);
-
-public sealed record BaselineRecoveryDispositionRequestDto(
-    string ConfirmationId,
-    bool Confirmed);
-
-public sealed record BaselineRecoveryDispositionDto(
-    bool Succeeded,
     string Status,
     string Message);
 
@@ -174,15 +145,6 @@ internal static class ControlPlanePrivacy
             {
                 DeviceIdentity = SafeDeviceIdentity(status.Device.DeviceIdentity),
             },
-            BaselineRecovery = status.BaselineRecovery is null
-                ? null
-                : status.BaselineRecovery with
-                {
-                    BaselineDeviceIdentity = SafeDeviceIdentity(
-                        status.BaselineRecovery.BaselineDeviceIdentity),
-                    ObservedDeviceIdentity = SafeDeviceIdentity(
-                        status.BaselineRecovery.ObservedDeviceIdentity),
-                },
         };
     }
 

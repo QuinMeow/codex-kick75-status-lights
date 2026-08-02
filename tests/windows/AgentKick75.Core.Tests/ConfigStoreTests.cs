@@ -122,7 +122,12 @@ public sealed class ConfigStoreTests
                 new LightStyle(RgbColor.Parse("#123ABC"), 0),
                 new LightStyle(RgbColor.Parse("#FEDCBA"), 50),
                 new LightStyle(RgbColor.Parse("#010203"), 100),
-                TimeSpan.FromSeconds(27)),
+                LightingSettings.Default.Interrupted,
+                TimeSpan.FromSeconds(27),
+                new KeepAwakeSettings(
+                    KeepAwakePolicy.WhileCodexActive,
+                    KeepAwakeRegion.SideLightsOnly,
+                    TimeSpan.FromSeconds(45))),
             TimeSpan.FromMinutes(91),
             startAtLogin: true);
 
@@ -135,6 +140,41 @@ public sealed class ConfigStoreTests
         JsonObject saved = Assert.IsType<JsonObject>(JsonNode.Parse(await File.ReadAllTextAsync(path)));
         Assert.Equal(1, saved["schemaVersion"]!.GetValue<int>());
         Assert.Equal(27d, saved["completeTtlSeconds"]!.GetValue<double>());
+        JsonObject keepAwake = Assert.IsType<JsonObject>(saved["keepAwake"]);
+        Assert.Equal("codexActive", keepAwake["policy"]!.GetValue<string>());
+        Assert.Equal("sideLights", keepAwake["region"]!.GetValue<string>());
+        Assert.Equal(45d, keepAwake["refreshIntervalSeconds"]!.GetValue<double>());
+    }
+
+    [Theory]
+    [InlineData("wholeKeyboard", "codexActive", 60)]
+    [InlineData("sideLights", "unknown", 60)]
+    [InlineData("sideLights", "hostRunning", 9)]
+    [InlineData("sideLights", "hostRunning", 301)]
+    public async Task LoadAsync_UnsupportedKeepAwakeValue_FallsBackToDefaults(
+        string region,
+        string policy,
+        int refreshIntervalSeconds)
+    {
+        using var directory = new ConfigTemporaryDirectory();
+        string path = directory.File("config.json");
+        await File.WriteAllTextAsync(
+            path,
+            $$"""
+              {
+                "schemaVersion": 1,
+                "keepAwake": {
+                  "policy": "{{policy}}",
+                  "region": "{{region}}",
+                  "refreshIntervalSeconds": {{refreshIntervalSeconds}}
+                }
+              }
+              """);
+
+        ConfigurationLoadResult result = await new ConfigurationStore(path).LoadAsync();
+
+        Assert.Equal(ConfigurationLoadStatus.InvalidUsingDefaults, result.Status);
+        Assert.Equal(AgentKick75Configuration.Default, result.Configuration);
     }
 
     private sealed class ConfigTemporaryDirectory : IDisposable

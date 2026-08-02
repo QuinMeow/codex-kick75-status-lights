@@ -8,7 +8,7 @@ public sealed class HidDeviceSelectorTests
     private readonly HidDeviceSelector selector = new();
 
     [Fact]
-    public void Select_AutoWithUsbAndDongle_SelectsOnlyUsbDeterministically()
+    public void Select_WithUsbAndUnsupportedIdentity_SelectsOnlyUsb()
     {
         HidInterfaceDescriptor dongle = Device(0x2620, path: "z-dongle");
         HidInterfaceDescriptor usb = Device(0x1026, path: "usb");
@@ -38,30 +38,13 @@ public sealed class HidDeviceSelectorTests
     }
 
     [Fact]
-    public void Select_DonglePreference_ReturnsDiagnosticOnlyAndDoesNotSelectVisibleUsb()
-    {
-        HidInterfaceDescriptor usb = Device(0x1026, path: "usb");
-        HidInterfaceDescriptor dongle = Device(0x2620, path: "dongle");
-
-        HidDeviceSelection result = selector.Select(
-            [usb, dongle],
-            HidTransportPreference.Dongle);
-
-        Assert.False(result.IsWritable);
-        Assert.Same(dongle, result.Device);
-        Assert.Equal(HidTransportProfiles.Kick75U1Dongle, result.Profile);
-        Assert.Equal(HidProfileSupport.DiagnosticOnly, result.Profile?.Support);
-        Assert.Equal(HidDeviceState.DiagnosticOnly, result.State);
-    }
-
-    [Fact]
-    public void Select_HighIdentity_IsDiagnosticOnlyAndNeverWritable()
+    public void Select_HighIdentity_IsUnsupportedAndNeverWritable()
     {
         HidDeviceSelection result = selector.Select([Device(0x1027, path: "high")]);
 
         Assert.False(result.IsWritable);
-        Assert.Equal(HidProfileSupport.DiagnosticOnly, result.Profile?.Support);
-        Assert.Equal(HidDeviceState.DiagnosticOnly, result.State);
+        Assert.Null(result.Profile);
+        Assert.Equal(HidDeviceState.Unsupported, result.State);
     }
 
     [Theory]
@@ -189,7 +172,6 @@ public sealed class HidDeviceSelectorTests
             inputLength: 64,
             outputLength: 64);
         HidDeviceSelection unsafeSelection = new(
-            HidTransportPreference.Usb,
             caps64,
             HidTransportProfiles.Kick75Usb,
             HidDeviceState.Present,
@@ -222,11 +204,8 @@ public sealed class HidDeviceSelectorTests
             "fabricated",
             0x1234,
             0x5678,
-            HidTransportPreference.Usb,
-            HidProfileSupport.Writable,
-            AutoPriority: 0);
+            HidProfileSupport.Writable);
         HidDeviceSelection unsafeSelection = new(
-            HidTransportPreference.Usb,
             arbitraryDevice,
             fabricated,
             HidDeviceState.Present,

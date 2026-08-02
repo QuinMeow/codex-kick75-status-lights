@@ -7,17 +7,17 @@ namespace AgentKick75.Integration.Tests;
 public sealed class CoreBaselineOwnershipStoreTests
 {
     [Fact]
-    public async Task SaveLoadAndRelease_CurrentMode_RoundTripsWithoutFieldLoss()
+    public async Task SaveLoadAndRelease_PersistsOnlyRestoreFieldsThenDeletesRecord()
     {
         string directory = Path.Combine(
             Path.GetTempPath(),
             "AgentKick75.IntegrationTests",
             Guid.NewGuid().ToString("N"));
-        string path = Path.Combine(directory, "baseline.json");
+        string path = Path.Combine(directory, "lighting-restore.json");
         Directory.CreateDirectory(directory);
         try
         {
-            var coreStore = new BaselineStore(path);
+            var coreStore = new LightingRestoreStore(path);
             var adapter = new FileBaselineOwnershipStore(coreStore);
             var expected = new BaselineOwnershipRecord(
                 BaselineRecord.CurrentSchemaVersion,
@@ -33,17 +33,19 @@ public sealed class CoreBaselineOwnershipStoreTests
             await adapter.SaveAsync(expected);
             BaselineOwnershipRecord loaded = Assert.IsType<BaselineOwnershipRecord>(
                 await adapter.LoadAsync());
-            BaselineLoadResult coreLoaded = await coreStore.LoadAsync();
+            LightingRestoreRecord? coreLoaded = await coreStore.LoadAsync();
 
             Assert.Equal(expected.CurrentMode, loaded.CurrentMode);
             Assert.Equal(expected.SideLightState, loaded.SideLightState);
-            Assert.Equal(expected.CurrentMode, coreLoaded.Baseline?.CurrentMode);
+            Assert.Equal(expected.CurrentMode, coreLoaded?.CurrentMode);
+            string json = await File.ReadAllTextAsync(path);
+            Assert.DoesNotContain("ownership", json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("captured", json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("transportProfile", json, StringComparison.Ordinal);
 
             await adapter.MarkReleasedAsync(expected.OwnershipMarker);
-            BaselineOwnershipRecord released = Assert.IsType<BaselineOwnershipRecord>(
-                await adapter.LoadAsync());
-            Assert.False(released.IsOwned);
-            Assert.Equal(expected.CurrentMode, released.CurrentMode);
+            Assert.Null(await adapter.LoadAsync());
+            Assert.False(File.Exists(path));
         }
         finally
         {

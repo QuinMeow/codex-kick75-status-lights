@@ -70,6 +70,21 @@
                 <input id="thinking-color" name="thinking-color" type="color" value="#006BFF" aria-label="思考中颜色选择器">
                 <input id="thinking-hex" name="thinking-hex" type="text" value="#006BFF" maxlength="7" spellcheck="false" aria-label="思考中颜色十六进制值">
               </div>
+              <div class="effect-controls">
+                <label for="thinking-effect">灯效
+                  <select id="thinking-effect" name="thinking-effect">
+                    <option value="static">静态</option>
+                    <option value="breathing">呼吸</option>
+                    <option value="flowing">流光</option>
+                  </select>
+                </label>
+                <label for="thinking-speed">速度
+                  <select id="thinking-speed" name="thinking-speed">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                    <option value="4">4</option><option value="5">5</option>
+                  </select>
+                </label>
+              </div>
               <label class="brightness-control" for="thinking-brightness">
                 <span>亮度</span>
                 <input id="thinking-brightness" name="thinking-brightness" type="range" min="0" max="100" value="100">
@@ -82,6 +97,21 @@
               <div class="color-inputs">
                 <input id="requires-input-color" name="requires-input-color" type="color" value="#FFB400" aria-label="等待输入颜色选择器">
                 <input id="requires-input-hex" name="requires-input-hex" type="text" value="#FFB400" maxlength="7" spellcheck="false" aria-label="等待输入颜色十六进制值">
+              </div>
+              <div class="effect-controls">
+                <label for="requires-input-effect">灯效
+                  <select id="requires-input-effect" name="requires-input-effect">
+                    <option value="static">静态</option>
+                    <option value="breathing">呼吸</option>
+                    <option value="flowing">流光</option>
+                  </select>
+                </label>
+                <label for="requires-input-speed">速度
+                  <select id="requires-input-speed" name="requires-input-speed">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                    <option value="4">4</option><option value="5">5</option>
+                  </select>
+                </label>
               </div>
               <label class="brightness-control" for="requires-input-brightness">
                 <span>亮度</span>
@@ -96,10 +126,53 @@
                 <input id="complete-color" name="complete-color" type="color" value="#00FF00" aria-label="已完成颜色选择器">
                 <input id="complete-hex" name="complete-hex" type="text" value="#00FF00" maxlength="7" spellcheck="false" aria-label="已完成颜色十六进制值">
               </div>
+              <div class="effect-controls">
+                <label for="complete-effect">灯效
+                  <select id="complete-effect" name="complete-effect">
+                    <option value="static">静态</option>
+                    <option value="breathing">呼吸</option>
+                    <option value="flowing">流光</option>
+                  </select>
+                </label>
+                <label for="complete-speed">速度
+                  <select id="complete-speed" name="complete-speed">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                    <option value="4">4</option><option value="5">5</option>
+                  </select>
+                </label>
+              </div>
               <label class="brightness-control" for="complete-brightness">
                 <span>亮度</span>
                 <input id="complete-brightness" name="complete-brightness" type="range" min="0" max="100" value="100">
                 <output id="complete-brightness-value" for="complete-brightness">100%</output>
+              </label>
+            </fieldset>
+
+            <fieldset class="style-row style-interrupted">
+              <legend><span class="style-dot" aria-hidden="true"></span>已中断</legend>
+              <div class="color-inputs">
+                <input id="interrupted-color" name="interrupted-color" type="color" value="#FF3B30" aria-label="已中断颜色选择器">
+                <input id="interrupted-hex" name="interrupted-hex" type="text" value="#FF3B30" maxlength="7" spellcheck="false" aria-label="已中断颜色十六进制值">
+              </div>
+              <div class="effect-controls">
+                <label for="interrupted-effect">灯效
+                  <select id="interrupted-effect" name="interrupted-effect">
+                    <option value="static">静态</option>
+                    <option value="breathing">呼吸</option>
+                    <option value="flowing">流光</option>
+                  </select>
+                </label>
+                <label for="interrupted-speed">速度
+                  <select id="interrupted-speed" name="interrupted-speed">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                    <option value="4">4</option><option value="5">5</option>
+                  </select>
+                </label>
+              </div>
+              <label class="brightness-control" for="interrupted-brightness">
+                <span>亮度</span>
+                <input id="interrupted-brightness" name="interrupted-brightness" type="range" min="0" max="100" value="100">
+                <output id="interrupted-brightness-value" for="interrupted-brightness">100%</output>
               </label>
             </fieldset>
           </div>
@@ -109,6 +182,31 @@
             <input id="complete-hold-seconds" name="complete-hold-seconds" type="number" min="1" max="3600" value="10">
             <span>秒</span>
           </div>
+          <p class="settings-note">Complete 按此时长保持后恢复原灯效；Goal 进入 blocked 时“已中断”会保持到下一条用户消息或 SessionEnd。当前官方事件无法可靠区分 Error。</p>
+
+          <fieldset class="keep-awake-settings">
+            <legend>侧灯保活（实验性）</legend>
+            <label for="keep-awake-policy">保活条件
+              <select id="keep-awake-policy" name="keep-awake-policy">
+                <option value="disabled">关闭</option>
+                <option value="codexActive">仅 Codex 任务活跃时</option>
+                <option value="hostRunning">后台程序运行期间</option>
+              </select>
+            </label>
+            <label for="keep-awake-region">保活区域
+              <select id="keep-awake-region" name="keep-awake-region">
+                <option value="sideLights">仅侧灯区</option>
+                <option value="wholeKeyboard" disabled>整个键盘（尚未安全支持）</option>
+              </select>
+            </label>
+            <label for="keep-awake-refresh-seconds">刷新间隔
+              <span class="number-with-unit">
+                <input id="keep-awake-refresh-seconds" name="keep-awake-refresh-seconds" type="number" min="10" max="300" value="60">
+                <span>秒</span>
+              </span>
+            </label>
+            <p>这是应用侧保活刷新，不会修改键盘固件的全局 Auto Sleep 时间。Kick75 官方能力未提供独立灯区休眠，因此主键区是否随保活保持点亮仍需实机验收。</p>
+          </fieldset>
 
           <div class="lighting-actions">
             <div class="preview-action">
@@ -117,16 +215,13 @@
                 <option value="thinking">思考中</option>
                 <option value="requires-input">等待输入</option>
                 <option value="complete">已完成</option>
+                <option value="interrupted">已中断</option>
               </select>
               <button class="button button-primary" id="preview-button" type="button">预览 3 秒</button>
             </div>
             <button class="action-button" id="pause-button" type="button">
-              <span class="action-title">暂停</span>
+              <span class="action-title">暂停并恢复</span>
               <span class="action-description">恢复原灯效并停止更新</span>
-            </button>
-            <button class="action-button" id="restore-button" type="button">
-              <span class="action-title">恢复原灯效</span>
-              <span class="action-description">释放当前侧灯接管</span>
             </button>
           </div>
 
@@ -203,20 +298,6 @@
           </div>
           <button class="button" id="install-hooks-button" type="button">安装 / 修复 Hook</button>
         </div>
-        <section class="baseline-recovery" id="baseline-recovery" aria-labelledby="baseline-recovery-heading" hidden>
-          <h3 id="baseline-recovery-heading">恢复已阻止：设备已变化</h3>
-          <p id="baseline-recovery-message"></p>
-          <dl>
-            <div><dt>已保存基线</dt><dd id="baseline-device-identity">—</dd></div>
-            <div><dt>当前设备</dt><dd id="observed-device-identity">—</dd></div>
-          </dl>
-          <label for="baseline-recovery-confirmation">
-            <input id="baseline-recovery-confirmation" type="checkbox" autocomplete="off">
-            <span>我了解旧设备可能保留最后一次侧灯状态，并仅放弃其已保存的接管标记。</span>
-          </label>
-          <button class="button baseline-recovery-button" id="baseline-recovery-button" type="button" disabled>放弃旧基线接管</button>
-          <small>该操作不会把旧数据写入当前设备。灯光接管会保持暂停，直到你手动恢复。</small>
-        </section>
         <details class="session-diagnostics">
           <summary>
             <span>会话诊断</span>
@@ -261,29 +342,8 @@
       </section>
     </div>
 
-    <section class="panel hardware-panel" aria-labelledby="hardware-heading">
-      <div class="hardware-copy">
-        <h2 id="hardware-heading">硬件测试</h2>
-        <p>读取基线、预览绿色、校验响应，然后精确恢复原始灯效。</p>
-      </div>
-      <fieldset class="transport-options">
-        <legend>传输方式</legend>
-        <label><input type="radio" name="hardware-transport" value="auto" checked> 自动</label>
-        <label><input type="radio" name="hardware-transport" value="usb"> USB</label>
-        <label title="仅诊断；硬件写入已禁用">
-          <input type="radio" name="hardware-transport" value="dongle" disabled>
-          Dongle（仅诊断）
-        </label>
-      </fieldset>
-      <label class="hardware-enable" for="hardware-test-enabled">
-        <input id="hardware-test-enabled" type="checkbox" autocomplete="off">
-        <span>启用硬件测试</span>
-      </label>
-      <button class="button button-primary hardware-button" id="hardware-test-button" type="button" disabled>运行读取 → 绿色 → 恢复测试</button>
-    </section>
-
     <footer class="footer">
-      <span>仅限本机 · 只控制 Kick75 侧灯 · 不执行固件操作</span>
+      <span>仅限本机 · 仅支持 Kick75 USB 侧灯 · 不执行固件操作</span>
       <span>本地模式</span>
     </footer>
   </main>

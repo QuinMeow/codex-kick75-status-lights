@@ -37,11 +37,11 @@ public sealed class CodexHookNormalizerTests
 
     [Theory]
     [InlineData("PreToolUse", true)]
-    [InlineData("PermissionRequest", false)]
+    [InlineData("PermissionRequest", true)]
     [InlineData("PostToolUse", true)]
-    public void Normalize_ToolEvent_RetainsOnlyCanonicalIdentifiers(
+    public void Normalize_ToolEvent_RetainsOnlyStateRelevantIdentifiers(
         string eventName,
-        bool toolUseIdExpected)
+        bool toolNameExpected)
     {
         string json = $$"""
             {
@@ -58,32 +58,62 @@ public sealed class CodexHookNormalizerTests
         CodexHookEvent? result = new CodexHookNormalizer().Normalize(json);
 
         Assert.NotNull(result);
-        Assert.Equal("request_user_input", result.ToolName);
-        Assert.Equal(toolUseIdExpected ? "tool-call-1" : null, result.ToolUseId);
+        Assert.Equal(toolNameExpected ? "request_user_input" : null, result.ToolName);
         string normalizedJson = JsonSerializer.Serialize(result);
         Assert.DoesNotContain("question", normalizedJson, StringComparison.Ordinal);
         Assert.DoesNotContain("answer", normalizedJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("tool-call-1", normalizedJson, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData("PreToolUse")]
-    [InlineData("PostToolUse")]
-    public void Normalize_CorrelatableToolEventWithoutToolUseId_RemainsBackwardCompatible(
-        string eventName)
+    [Fact]
+    public void Normalize_UpdateGoalBlocked_ReturnsPrivacyTrimmedGoalBlockedEvent()
     {
-        string json = $$"""
+        const string json = """
             {
-              "hook_event_name": "{{eventName}}",
+              "hook_event_name": "PostToolUse",
               "session_id": "session-1",
               "turn_id": "turn-1",
-              "tool_name": "request_user_input"
+              "tool_name": "update_goal",
+              "tool_use_id": "tool-call-1",
+              "tool_input": {
+                "status": "blocked",
+                "private_reason": "secret"
+              },
+              "tool_response": { "result": "secret" }
             }
             """;
 
         CodexHookEvent? result = new CodexHookNormalizer().Normalize(json);
 
         Assert.NotNull(result);
-        Assert.Null(result.ToolUseId);
+        Assert.Equal(CodexHookEventKind.GoalBlocked, result.Kind);
+        Assert.Equal("session-1", result.SessionId);
+        Assert.Equal("turn-1", result.TurnId);
+        Assert.Null(result.ToolName);
+        string normalizedJson = JsonSerializer.Serialize(result);
+        Assert.DoesNotContain("blocked", normalizedJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", normalizedJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Normalize_UpdateGoalComplete_RemainsOrdinaryPostToolUse()
+    {
+        const string json = """
+            {
+              "hook_event_name": "PostToolUse",
+              "session_id": "session-1",
+              "turn_id": "turn-1",
+              "tool_name": "update_goal",
+              "tool_use_id": "tool-call-1",
+              "tool_input": { "status": "complete" }
+            }
+            """;
+
+        CodexHookEvent? result = new CodexHookNormalizer().Normalize(json);
+
+        Assert.NotNull(result);
+        Assert.Equal(CodexHookEventKind.PostToolUse, result.Kind);
+        Assert.Equal("update_goal", result.ToolName);
     }
 
     [Fact]
@@ -133,11 +163,8 @@ public sealed class CodexHookNormalizerTests
     [InlineData("{\"hook_event_name\":\"Unknown\",\"session_id\":\"s\",\"turn_id\":\"t\"}")]
     [InlineData("{\"hook_event_name\":\"Stop\",\"turn_id\":\"t\"}")]
     [InlineData("{\"hook_event_name\":\"Stop\",\"session_id\":\"s\"}")]
-    [InlineData("{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"s\",\"turn_id\":\"t\"}")]
     [InlineData("{\"hook_event_name\":1,\"session_id\":\"s\",\"turn_id\":\"t\"}")]
     [InlineData("{\"hook_event_name\":\"Stop\",\"session_id\":{},\"turn_id\":\"t\"}")]
-    [InlineData("{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"s\",\"turn_id\":\"t\",\"tool_name\":\"x\",\"tool_use_id\":1}")]
-    [InlineData("{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"s\",\"turn_id\":\"t\",\"tool_name\":\"x\",\"tool_use_id\":\"bad\\u0000id\"}")]
     public void Normalize_InvalidOrIncompleteSchema_ReturnsNull(string json)
     {
         Assert.Null(new CodexHookNormalizer().Normalize(json));
@@ -152,23 +179,6 @@ public sealed class CodexHookNormalizerTests
               "session_id": "first",
               "session_id": "second",
               "turn_id": "turn-1"
-            }
-            """;
-
-        Assert.Null(new CodexHookNormalizer().Normalize(json));
-    }
-
-    [Fact]
-    public void Normalize_ToolUseIdOverIdentifierLimit_ReturnsNull()
-    {
-        string toolUseId = new('x', CodexHookNormalizer.MaxIdentifierLength + 1);
-        string json = $$"""
-            {
-              "hook_event_name": "PostToolUse",
-              "session_id": "s",
-              "turn_id": "t",
-              "tool_name": "request_user_input",
-              "tool_use_id": "{{toolUseId}}"
             }
             """;
 

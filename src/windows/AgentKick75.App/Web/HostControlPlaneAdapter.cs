@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
-using AgentKick75.App.Commands;
 using AgentKick75.App.Hosting;
 using AgentKick75.App.Lighting;
 using AgentKick75.Core.Installation;
@@ -17,8 +16,6 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
 {
     private const int SubscriberCapacity = 64;
     private const string UsbTransportProfile = "kick75-usb";
-    private const string DongleTransportProfile = "kick75-u1-dongle";
-    private const string HighDiagnosticTransportProfile = "kick75-high-diagnostic";
 
     private readonly HostCoordinator coordinator;
     private readonly HookRegistrationManager? hookRegistrationManager;
@@ -85,6 +82,7 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
             ControlPreviewState.Thinking => TaskVisualState.Thinking,
             ControlPreviewState.RequiresInput => TaskVisualState.RequiresInput,
             ControlPreviewState.Complete => TaskVisualState.Complete,
+            ControlPreviewState.Interrupted => TaskVisualState.Interrupted,
             _ => throw new ArgumentOutOfRangeException(nameof(state)),
         };
         return coordinator.PreviewAsync(visualState, duration, cancellationToken);
@@ -104,31 +102,6 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
         }
 
         return ToStatus(coordinator.GetStatus());
-    }
-
-    public ValueTask RestoreOriginalLightingAsync(CancellationToken cancellationToken)
-    {
-        return coordinator.RestoreAsync(cancellationToken);
-    }
-
-    public async ValueTask<HardwareTestResultDto> RunHardwareTestAsync(
-        HardwareTestRequestDto request,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (!TryParseTransport(request.Transport, out HardwareTransportChoice transport))
-        {
-            return new HardwareTestResultDto(false, "refused", "Unknown transport.", null);
-        }
-
-        HardwareTestCommandResult result = await coordinator.RunHardwareTestAsync(
-            new HardwareTestArguments(transport),
-            cancellationToken).ConfigureAwait(false);
-        return new HardwareTestResultDto(
-            result.Succeeded,
-            result.Succeeded ? "passed" : "refused",
-            result.Outcome,
-            result.Transport);
     }
 
     public async ValueTask<HookInstallationResultDto> InstallCodexHooksAsync(
@@ -188,23 +161,6 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
                 "failed",
                 "Codex Hook 安装失败，请确认当前用户配置可写后重试。");
         }
-    }
-
-    public async ValueTask<BaselineRecoveryDispositionDto> AbandonMismatchedBaselineAsync(
-        BaselineRecoveryDispositionRequestDto request,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        BaselineMismatchRecoveryResult result = await coordinator
-            .AbandonMismatchedBaselineAsync(
-                request.ConfirmationId,
-                request.Confirmed,
-                cancellationToken)
-            .ConfigureAwait(false);
-        return new BaselineRecoveryDispositionDto(
-            result.Succeeded,
-            result.Status.ToString(),
-            result.Message);
     }
 
     public IAsyncEnumerable<ControlEventDto> WatchEventsAsync(
@@ -322,9 +278,10 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
         LightingWorkerSnapshot lighting = status.Lighting;
         return new ControlStatusDto(
             status.AggregateState.ToString(),
-            status.SessionCount,
+            status.ActiveSessionCount,
             status.LastEventAtUtc,
-            status.Paused,
+            status.LifecycleState.ToString(),
+            status.FaultCode?.ToString(),
             status.IsPreviewActive,
             status.HookEnablement.ToString(),
             new DeviceDiagnosticsDto(
@@ -336,8 +293,7 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
                 HidDescriptorVersion(lighting),
                 ControlPlanePrivacy.SafeDeviceIdentity(lighting.DeviceIdentity),
                 lighting.LastFailure?.ToString(),
-                lighting.InterfaceFingerprint),
-            ToBaselineRecovery(lighting.BaselineMismatch));
+                lighting.InterfaceFingerprint));
     }
 
     private static string DeviceModel(LightingWorkerSnapshot lighting)
@@ -360,8 +316,6 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
         return lighting.TransportProfile switch
         {
             UsbTransportProfile => "Kick75 USB HID device",
-            DongleTransportProfile => "Kick75 U1 receiver",
-            HighDiagnosticTransportProfile => "Kick75 High HID device",
             _ => "Unknown HID device",
         };
     }
@@ -374,34 +328,8 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
             : $"HID descriptor bcdDevice 0x{versionNumber.Value:X4}";
     }
 
-    private static BaselineRecoveryRiskDto? ToBaselineRecovery(
-        BaselineIdentityMismatchNotice? mismatch)
-    {
-        return mismatch is null
-            ? null
-            : new BaselineRecoveryRiskDto(
-                "DeviceIdentityMismatch",
-                mismatch.ConfirmationId,
-                "Automatic recovery was refused because the currently observed device does not match the owned baseline. Abandoning ownership never writes the old bytes and pauses lighting control.",
-                ControlPlanePrivacy.SafeDeviceIdentity(mismatch.BaselineDeviceIdentity),
-                ControlPlanePrivacy.SafeDeviceIdentity(mismatch.ObservedDeviceIdentity));
-    }
-
     private static string SupportStatus(LightingWorkerSnapshot lighting)
     {
-        if (lighting.DeviceSupport == LightingDeviceSupport.DiagnosticOnly &&
-            (string.Equals(
-                    lighting.TransportProfile,
-                    DongleTransportProfile,
-                    StringComparison.Ordinal) ||
-                string.Equals(
-                    lighting.TransportProfile,
-                    HighDiagnosticTransportProfile,
-                    StringComparison.Ordinal)))
-        {
-            return "DiagnosticOnly";
-        }
-
         if (lighting.DeviceSupport == LightingDeviceSupport.Writable &&
             string.Equals(
                 lighting.TransportProfile,
@@ -415,26 +343,11 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
                     : "Unknown";
         }
 
-        return "Unknown";
+        return lighting.TransportProfile is null ? "Unknown" : "Unsupported";
     }
 
     private static string ReceiverStatus(LightingWorkerSnapshot lighting)
     {
-        if (string.Equals(
-                lighting.TransportProfile,
-                DongleTransportProfile,
-                StringComparison.Ordinal))
-        {
-            if (lighting.LastFailure is LightingTransportFailureKind.ReceiverUnavailable)
-            {
-                return "Unavailable";
-            }
-
-            return lighting.LastFailure is LightingTransportFailureKind.DeviceDisconnected
-                ? "Disconnected"
-                : "Present";
-        }
-
         return lighting.TransportProfile is null ? "Unknown" : "NotApplicable";
     }
 
@@ -443,7 +356,7 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
         return lighting.LastFailure switch
         {
             LightingTransportFailureKind.DeviceDisconnected => "Disconnected",
-            LightingTransportFailureKind.KeyboardSleeping => "SleepingOrUnresponsive",
+            LightingTransportFailureKind.Timeout => "SleepingOrUnresponsive",
             LightingTransportFailureKind.DeviceBusy => "DeviceBusy",
             LightingTransportFailureKind.ProtocolViolation => "InvalidResponse",
             _ when lighting.State is LightingWorkerState.Active => "Ready",
@@ -458,12 +371,20 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
             ToStyle(settings.RequiresInput),
             ToStyle(settings.Complete),
             checked((int)settings.CompleteTtl.TotalSeconds),
-            LaunchAtSignIn: startAtLogin);
+            LaunchAtSignIn: startAtLogin,
+            Interrupted: ToStyle(settings.Interrupted),
+            KeepAwakePolicy: KeepAwakePolicyName(settings.KeepAwake.Policy),
+            KeepAwakeRefreshSeconds: checked((int)settings.KeepAwake.RefreshInterval.TotalSeconds),
+            KeepAwakeRegion: "sideLights");
     }
 
     private static ControlLightStyleDto ToStyle(LightStyle style)
     {
-        return new ControlLightStyleDto(style.Color.ToString(), style.Brightness);
+        return new ControlLightStyleDto(
+            style.Color.ToString(),
+            style.Brightness,
+            EffectName(style.Effect),
+            style.Speed);
     }
 
     private static LightingSettings FromSettings(ControlSettingsDto settings)
@@ -477,26 +398,64 @@ public sealed class HostControlPlaneAdapter : IControlPlane, IDisposable
             FromStyle(settings.Thinking),
             FromStyle(settings.RequiresInput),
             FromStyle(settings.Complete),
-            TimeSpan.FromSeconds(settings.CompleteHoldSeconds));
+            FromStyle(settings.Interrupted ?? ToStyle(LightingSettings.Default.Interrupted)),
+            TimeSpan.FromSeconds(settings.CompleteHoldSeconds),
+            new KeepAwakeSettings(
+                ParseKeepAwakePolicy(settings.KeepAwakePolicy),
+                ParseKeepAwakeRegion(settings.KeepAwakeRegion),
+                TimeSpan.FromSeconds(settings.KeepAwakeRefreshSeconds)));
     }
+
+    private static string KeepAwakePolicyName(KeepAwakePolicy policy) => policy switch
+    {
+        KeepAwakePolicy.Disabled => "disabled",
+        KeepAwakePolicy.WhileCodexActive => "codexActive",
+        KeepAwakePolicy.WhileHostRunning => "hostRunning",
+        _ => throw new ArgumentOutOfRangeException(nameof(policy)),
+    };
+
+    private static KeepAwakePolicy ParseKeepAwakePolicy(string value) => value switch
+    {
+        "disabled" => KeepAwakePolicy.Disabled,
+        "codexActive" => KeepAwakePolicy.WhileCodexActive,
+        "hostRunning" => KeepAwakePolicy.WhileHostRunning,
+        _ => throw new ArgumentOutOfRangeException(nameof(value), "Unsupported keep-awake policy."),
+    };
+
+    private static KeepAwakeRegion ParseKeepAwakeRegion(string value) => value switch
+    {
+        "sideLights" => KeepAwakeRegion.SideLightsOnly,
+        _ => throw new ArgumentOutOfRangeException(nameof(value), "Only side-light keep-awake is supported."),
+    };
 
     private static LightStyle FromStyle(ControlLightStyleDto style)
     {
         ArgumentNullException.ThrowIfNull(style);
-        return new LightStyle(RgbColor.Parse(style.Color), style.Brightness);
+        return new LightStyle(
+            RgbColor.Parse(style.Color),
+            style.Brightness,
+            ParseEffect(style.Effect),
+            style.Speed);
     }
 
-    private static bool TryParseTransport(string value, out HardwareTransportChoice transport)
+    private static SideLightEffect ParseEffect(string value)
     {
-        transport = value switch
+        return value.ToLowerInvariant() switch
         {
-            "auto" => HardwareTransportChoice.Auto,
-            "usb" => HardwareTransportChoice.Usb,
-            "dongle" => HardwareTransportChoice.Dongle,
-            _ => default,
+            "flowing" => SideLightEffect.Flowing,
+            "static" => SideLightEffect.Static,
+            "breathing" => SideLightEffect.Breathing,
+            _ => throw new ArgumentOutOfRangeException(nameof(value)),
         };
-        return value is "auto" or "usb" or "dongle";
     }
+
+    private static string EffectName(SideLightEffect effect) => effect switch
+    {
+        SideLightEffect.Flowing => "flowing",
+        SideLightEffect.Static => "static",
+        SideLightEffect.Breathing => "breathing",
+        _ => throw new ArgumentOutOfRangeException(nameof(effect)),
+    };
 
     private static Channel<ControlEventDto> CreateSubscription()
     {

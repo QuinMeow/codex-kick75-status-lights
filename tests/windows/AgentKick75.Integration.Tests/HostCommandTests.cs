@@ -7,19 +7,21 @@ namespace AgentKick75.Integration.Tests;
 
 public sealed class HostCommandTests
 {
-    [Theory]
-    [InlineData("auto", HardwareTransportChoice.Auto)]
-    [InlineData("usb", HardwareTransportChoice.Usb)]
-    [InlineData("dongle", HardwareTransportChoice.Dongle)]
-    public void Parse_HardwareTestTransport_IsReadyToRun(
-        string transport,
-        HardwareTransportChoice expected)
+    [Fact]
+    public void Parse_HardwareTest_IsReadyToRun()
     {
-        ParsedCommand parsed = CommandLine.Parse(
-            ["hardware-test", "--transport", transport]);
+        ParsedCommand parsed = CommandLine.Parse(["hardware-test"]);
 
         Assert.Equal(AppCommandKind.HardwareTest, parsed.Kind);
-        Assert.Equal(expected, parsed.HardwareTest!.Transport);
+        Assert.NotNull(parsed.HardwareTest);
+    }
+
+    [Fact]
+    public void Parse_TransportOption_IsRejected()
+    {
+        ParsedCommand parsed = CommandLine.Parse(["hardware-test", "--transport", "usb"]);
+
+        Assert.Equal(AppCommandKind.Invalid, parsed.Kind);
     }
 
     [Fact]
@@ -28,8 +30,6 @@ public sealed class HostCommandTests
         ParsedCommand parsed = CommandLine.Parse(
         [
             "hardware-test",
-            "--transport",
-            "usb",
             "--cycles",
             "20",
             "--green-seconds",

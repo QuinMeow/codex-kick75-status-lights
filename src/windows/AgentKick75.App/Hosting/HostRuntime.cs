@@ -30,12 +30,21 @@ public sealed class HostRuntime : IAsyncDisposable
         this.lightingWorker = lightingWorker ?? throw new ArgumentNullException(nameof(lightingWorker));
         this.coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         this.diagnosticLog = diagnosticLog;
-        pipeServer = new NamedPipeMessageServer(coordinator.HandlePipeMessageAsync, pipeName);
+        pipeServer = new NamedPipeMessageServer(
+            coordinator.HandlePipeMessageAsync,
+            pipeName,
+            clientRequestTimeout: TimeSpan.FromSeconds(15),
+            responseFlushed: HandlePipeResponseFlushedAsync);
     }
 
     public HostCoordinator Coordinator => coordinator;
 
     public void Start()
+    {
+        StartAsync().GetAwaiter().GetResult();
+    }
+
+    public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         if (started)
         {
@@ -50,6 +59,21 @@ public sealed class HostRuntime : IAsyncDisposable
 
         lightingWorker.SnapshotChanged += HandleLightingSnapshotChanged;
         lightingWorker.Start();
+        try
+        {
+            await lightingWorker.RecoverPendingRestoreAsync(cancellationToken).ConfigureAwait(false);
+            if (coordinator.GetStatus().LifecycleState == ApplicationLifecycleState.Starting)
+            {
+                coordinator.MarkRunning();
+            }
+        }
+        catch
+        {
+            coordinator.MarkStartupFault();
+            lightingWorker.SnapshotChanged -= HandleLightingSnapshotChanged;
+            throw;
+        }
+
         coordinator.StartEventProcessing();
         pipeServer.Start();
         cleanupTask = CleanupLoopAsync(stopSource.Token);
@@ -61,6 +85,20 @@ public sealed class HostRuntime : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         List<Exception> failures = [];
+        LifecycleStopResult? stopResult = null;
+        if (started)
+        {
+            try
+            {
+                stopResult = await coordinator.StopAsync(LifecycleStopReason.NormalExit)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
+            }
+        }
+
         try
         {
             await stopSource.CancelAsync().ConfigureAwait(false);
@@ -115,15 +153,18 @@ public sealed class HostRuntime : IAsyncDisposable
         {
             lightingWorker.SnapshotChanged -= HandleLightingSnapshotChanged;
             stopSource.Dispose();
+            coordinator.MarkStopped();
         }
 
         if (started)
         {
             WriteDiagnostic(
                 SanitizedDiagnosticEventType.HostStopped,
-                code: failures.Count == 0
-                    ? SanitizedDiagnosticCode.Succeeded
-                    : SanitizedDiagnosticCode.UnexpectedFailure);
+                code: stopResult?.Succeeded == false
+                    ? SanitizedDiagnosticCode.RestoreFailed
+                    : failures.Count == 0
+                        ? SanitizedDiagnosticCode.Succeeded
+                        : SanitizedDiagnosticCode.UnexpectedFailure);
         }
 
         if (diagnosticLog is not null)
@@ -148,6 +189,21 @@ public sealed class HostRuntime : IAsyncDisposable
         {
             throw new AggregateException("Host shutdown encountered multiple failures.", failures);
         }
+    }
+
+    private ValueTask HandlePipeResponseFlushedAsync(
+        PipeEnvelope request,
+        PipeEnvelope response,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        if (request.Kind == PipeMessageKinds.PrepareUninstallRequest &&
+            response.Kind == PipeMessageKinds.Accepted)
+        {
+            coordinator.NotifyPrepareUninstallResponseFlushed();
+        }
+
+        return ValueTask.CompletedTask;
     }
 
     private void HandleLightingSnapshotChanged(object? sender, LightingWorkerSnapshot current)
