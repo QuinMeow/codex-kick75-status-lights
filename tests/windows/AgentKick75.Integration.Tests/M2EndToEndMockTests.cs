@@ -16,6 +16,7 @@ namespace AgentKick75.Integration.Tests;
 /// Codex JSON stdin -> privacy normalizer -> real current-user Named Pipe -> Host
 /// reducer -> worker -> mock lighting transport.
 /// </summary>
+[Collection(RealPipeTestCollection.Name)]
 public sealed class M2EndToEndMockTests
 {
     private static readonly byte[] Baseline =
@@ -279,10 +280,16 @@ public sealed class M2EndToEndMockTests
             reason = "other",
         });
         await WaitForAsync(
-            () => harness.Coordinator.GetStatus() is
+            () =>
             {
-                AggregateState: TaskVisualState.Complete,
-                ActiveSessionCount: 0,
+                TaskStateSnapshot snapshot = harness.Reducer.Snapshot();
+                return harness.Coordinator.GetStatus() is
+                {
+                    AggregateState: TaskVisualState.Complete,
+                    ActiveSessionCount: 0,
+                }
+                    && snapshot.Sessions.Count == 1
+                    && snapshot.Sessions[0].SessionId == "session-a";
             },
             "SessionEnd removed the wrong session entry.");
 

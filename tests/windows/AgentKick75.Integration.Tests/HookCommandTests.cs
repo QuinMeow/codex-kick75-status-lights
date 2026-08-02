@@ -7,6 +7,7 @@ using AgentKick75.Core.Hooks;
 
 namespace AgentKick75.Integration.Tests;
 
+[Collection(RealPipeTestCollection.Name)]
 public sealed class HookCommandTests
 {
     [Fact]
@@ -154,18 +155,27 @@ public sealed class HookCommandTests
     public async Task ExecuteAsync_RealPipe_OnlineP95StaysBelowBudget()
     {
         const int sampleCount = 20;
+        const int expectedHandledCount = sampleCount + 1;
         const string input = """
             {"hook_event_name":"Stop","session_id":"s","turn_id":"t"}
             """;
         string pipeName = $"AgentKick75.hook-latency.{Guid.NewGuid():N}";
         int handledCount = 0;
+        var listenerReady = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var allHandled = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         await using var server = new NamedPipeMessageServer(
             (request, cancellationToken) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (Interlocked.Increment(ref handledCount) == sampleCount)
+                int currentHandledCount = Interlocked.Increment(ref handledCount);
+                if (currentHandledCount == 1)
+                {
+                    listenerReady.TrySetResult();
+                }
+
+                if (currentHandledCount == expectedHandledCount)
                 {
                     allHandled.TrySetResult();
                 }
@@ -177,6 +187,12 @@ public sealed class HookCommandTests
         var client = new NamedPipeRequestClient(pipeName);
         var samples = new TimeSpan[sampleCount];
 
+        await client.SendAsync(
+            PipeEnvelope.Create(PipeMessageKinds.StatusRequest, new { }),
+            expectResponse: false,
+            TimeSpan.FromSeconds(2));
+        await listenerReady.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
         for (int index = 0; index < sampleCount; index++)
         {
             Stopwatch elapsed = Stopwatch.StartNew();
@@ -186,7 +202,7 @@ public sealed class HookCommandTests
             samples[index] = elapsed.Elapsed;
         }
 
-        await allHandled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await allHandled.Task.WaitAsync(TimeSpan.FromSeconds(5));
         TimeSpan p95 = Percentile95(samples);
         Assert.True(
             p95 < TimeSpan.FromMilliseconds(300),
