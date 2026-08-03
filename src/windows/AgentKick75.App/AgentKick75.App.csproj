@@ -17,6 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Assets\AgentKick75Tray.ico" LogicalName="AgentKick75.Assets.AgentKick75Tray.ico" />
     <EmbeddedResource Include="wwwroot\index.html" LogicalName="AgentKick75.Web.index.html" />
     <EmbeddedResource Include="wwwroot\styles.css" LogicalName="AgentKick75.Web.styles.css" />
     <EmbeddedResource Include="wwwroot\app.js" LogicalName="AgentKick75.Web.app.js" />
