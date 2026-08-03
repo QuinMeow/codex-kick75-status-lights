@@ -49,8 +49,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         ]);
         _ = menu.Handle;
 
-        appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath)
-            ?? (Icon)SystemIcons.Application.Clone();
+        appIcon = LoadTrayIcon();
         notifyIcon = new NotifyIcon
         {
             Icon = appIcon,
@@ -179,5 +178,19 @@ public sealed class TrayApplicationContext : ApplicationContext
             "AgentKick75",
             MessageBoxButtons.OK,
             MessageBoxIcon.Error);
+    }
+
+    private static Icon LoadTrayIcon()
+    {
+        using var stream = typeof(TrayApplicationContext).Assembly.GetManifestResourceStream(
+            "AgentKick75.Assets.AgentKick75Tray.ico");
+        if (stream is not null)
+        {
+            using var icon = new Icon(stream);
+            return (Icon)icon.Clone();
+        }
+
+        return Icon.ExtractAssociatedIcon(Application.ExecutablePath)
+            ?? (Icon)SystemIcons.Application.Clone();
     }
 }
